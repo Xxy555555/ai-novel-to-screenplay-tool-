@@ -1,0 +1,39 @@
+server:
+  port: 8080
+  servlet:
+    encoding:
+      charset: UTF-8
+      enabled: true
+      force: true
+
+spring:
+  application:
+    name: novel-to-screenplay
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 10MB
+  jackson:
+    property-naming-strategy: SNAKE_CASE
+    default-property-inclusion: non_null
+    serialization:
+      indent-output: true
+
+# ====================== 大模型适配器配置（框架占位，业务实现时读取） ======================
+# 设计:一个通用适配器，通过 (base-url + model + api-key) 切换任意模型。
+# provider 可选: stub（离线桩,默认） | openai（通用 OpenAI 兼容） | claude（原生 Anthropic）
+# 详见 docs/PRD.md 6.4 节。全部支持环境变量覆盖（SCRIPTFORGE_LLM_*）。
+scriptforge:
+  llm:
+    provider: ${SCRIPTFORGE_LLM_PROVIDER:stub}
+    api-key: ${SCRIPTFORGE_LLM_API_KEY:}
+    base-url: ${SCRIPTFORGE_LLM_BASE_URL:https://api.openai.com/v1}
+    model: ${SCRIPTFORGE_LLM_MODEL:gpt-4o-mini}
+    temperature: 0.4
+    timeout-seconds: 120
+    chunk-size: 3500
+    max-repair-retries: 2
+
+logging:
+  level:
+    com.scriptforge: INFO

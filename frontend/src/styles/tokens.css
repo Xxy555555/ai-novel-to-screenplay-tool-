@@ -1,0 +1,64 @@
+/*
+ * 设计令牌（深色影视工作台主题）——对应 docs/UI-Prototype-Design.md 第 2 节。
+ * 业务页面统一引用这些 CSS 变量，便于换肤。
+ */
+:root {
+  /* 底色 / 表面 */
+  --bg-base: #0E1116;
+  --bg-surface: #161B22;
+  --bg-raised: #1C232D;
+  --bg-inset: #0A0D12;
+  --border-default: #2A3441;
+  --border-strong: #3A4654;
+
+  /* 文字 */
+  --text-primary: #E6EDF3;
+  --text-secondary: #9DA7B3;
+  --text-muted: #6E7681;
+
+  /* 强调与语义 */
+  --accent-primary: #E8B349;
+  --accent-hover: #F2C45E;
+  --accent-soft: rgba(232, 179, 73, 0.14);
+  --success: #3FB950;
+  --warning: #D29922;
+  --danger: #F85149;
+  --info: #58A6FF;
+
+  /* 剧本元素类型色 */
+  --el-action: #9DA7B3;
+  --el-dialogue: #2DD4BF;
+  --el-voiceover: #A78BFA;
+  --el-transition: #E8B349;
+  --el-montage: #F472B6;
+  --el-parenthetical: #6E7681;
+
+  /* 间距 / 圆角 */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --radius-control: 6px;
+  --radius-card: 10px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: 'Inter', 'Noto Sans SC', system-ui, -apple-system, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+}
