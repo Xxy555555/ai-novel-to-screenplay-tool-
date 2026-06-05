@@ -113,14 +113,17 @@ public class StubLlmClient implements LlmClient {
             }
         }
 
-        // 1) 收集候选角色名：内置提示中出现在本章的 + 对白归属正则识别的。
+        // 1) 收集候选角色名：内置样本用精选 cast（不跑通用正则，避免误捕）；
+        //    无内置提示的任意文本才退化到带过滤的对白归属正则识别。
         Set<String> names = new LinkedHashSet<>();
         for (String name : HINTS.keySet()) {
             if (chapter.contains(name)) {
                 names.add(name);
             }
         }
-        collectSpeakerNames(chapter, zh, names);
+        if (names.isEmpty()) {
+            collectSpeakerNames(chapter, zh, names);
+        }
 
         // 2) 逐行产出节拍。
         List<Map<String, Object>> beats = new ArrayList<>();
@@ -213,16 +216,32 @@ public class StubLlmClient implements LlmClient {
         return c;
     }
 
+    // 中文常见非姓名用字/虚词，用于过滤通用正则的误捕。
+    private static final Pattern ZH_NON_NAME = Pattern.compile(
+            "[的了着是只却又也就还在和与跟把被让对从向到这那们呢吗啊吧很都更最我你他她它母父亲儿女]");
+
     private void collectSpeakerNames(String chapter, boolean zh, Set<String> names) {
         Matcher m = (zh ? ZH_SPEAKER : EN_SPEAKER).matcher(chapter);
         while (m.find()) {
             for (int g = 1; g <= m.groupCount(); g++) {
                 String name = m.group(g);
-                if (name != null && !name.isBlank()) {
+                if (name != null && plausibleName(name.trim(), zh)) {
                     names.add(name.trim());
                 }
             }
         }
+    }
+
+    /** 通用识别的姓名可信度过滤：中文 2-3 字且不含虚词/代词；英文首字母大写。 */
+    private static boolean plausibleName(String name, boolean zh) {
+        if (name.isBlank()) {
+            return false;
+        }
+        if (zh) {
+            int len = name.length();
+            return len >= 2 && len <= 3 && !ZH_NON_NAME.matcher(name).find();
+        }
+        return Character.isUpperCase(name.charAt(0));
     }
 
     /** 在 quote 之前的文本里找最靠近 quote 的已知角色名作为说话人。 */
@@ -250,22 +269,27 @@ public class StubLlmClient implements LlmClient {
         return names.isEmpty() ? null : names.iterator().next();
     }
 
+    // 仅当出现明确的「内心独白」标记时才判为 narration（→ 画外音），避免把场景描写误转 V.O.。
     private static boolean isNarration(String line, boolean zh) {
         if (zh) {
-            return line.matches(".*(我|心里|心想|想着|记得|那是|后悔|觉得|仿佛|从此).*");
+            return line.matches(".*(心里|心想|想着|记得|后悔|觉得|我知道|我明白|那是我|这辈子|暗想|默念).*");
         }
-        return line.matches(".*\\b(I|I'd|remembered|thought|felt|knew|wondered)\\b.*");
+        return line.matches(".*\\b(remembered|thought|felt|knew|wondered|realized)\\b.*");
+    }
+
+    /** 多行文本上的子串/正则查找（{@code String.matches} 的 {@code .} 不跨行，故用 find）。 */
+    private static boolean find(String text, String regex) {
+        return Pattern.compile(regex).matcher(text).find();
     }
 
     private static String guessIntExt(String text, boolean zh) {
         if (zh) {
-            if (text.matches(".*(田|田埂|田间|地头|村口|街|路上|野|院子|门外|河边).*")
-                    && !text.matches(".*(屋里|房里|堂屋|室内).*")) {
+            if (find(text, "田埂|田间|地头|村口|街上|路上|野外|院子|门外|河边|山岗|江边|村头") && !find(text, "屋里|房里|堂屋|室内")) {
                 return "EXT";
             }
             return "INT";
         }
-        if (text.matches("(?s).*\\b(field|street|road|outside|garden|yard|river|hill)\\b.*")) {
+        if (find(text, "\\b(field|street|road|outside|garden|yard|river|hill)\\b")) {
             return "EXT";
         }
         return "INT";
@@ -273,18 +297,18 @@ public class StubLlmClient implements LlmClient {
 
     private static String guessTime(String text, boolean zh) {
         if (zh) {
-            if (text.matches(".*(夜|晚|夤夜|深夜|入夜|月).*")) {
+            if (find(text, "夜|晚|夤夜|深夜|入夜|月色")) {
                 return "夜";
             }
-            if (text.matches(".*(清晨|早晨|晨|白日|晌午|午后|日头|阳光).*")) {
+            if (find(text, "清晨|早晨|晨光|白日|晌午|午后|日头|阳光|天不亮|拂晓")) {
                 return "日";
             }
             return "";
         }
-        if (text.matches("(?s).*\\b(night|midnight|evening|dusk)\\b.*")) {
+        if (find(text, "\\b(night|midnight|evening|dusk)\\b")) {
             return "NIGHT";
         }
-        if (text.matches("(?s).*\\b(morning|noon|afternoon|dawn|daylight)\\b.*")) {
+        if (find(text, "\\b(morning|noon|afternoon|dawn|daylight)\\b")) {
             return "DAY";
         }
         return "";
