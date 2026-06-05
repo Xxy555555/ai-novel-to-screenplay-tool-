@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ScriptForge · 把小说一键变成可拍摄的剧本</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+:root{
+  --bg:#0E1116; --surface:#161B22; --raised:#1C232D; --inset:#0A0D12;
+  --border:#2A3441; --border-strong:#3A4654;
+  --text:#E6EDF3; --text-2:#9DA7B3; --muted:#6E7681;
+  --accent:#E8B349; --accent-hover:#F2C45E; --accent-soft:rgba(232,179,73,.14);
+  --success:#3FB950; --warning:#D29922; --danger:#F85149; --info:#58A6FF;
+  --ui:'Inter','Noto Sans SC',system-ui,-apple-system,sans-serif;
+  --mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+  --r-ctl:6px; --r-card:10px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  font-family:var(--ui); background:var(--bg); color:var(--text);
+  -webkit-font-smoothing:antialiased; line-height:1.5;
+  background-image:radial-gradient(1200px 700px at 50% -10%, rgba(232,179,73,.07), transparent 60%);
+  min-height:100%; display:flex; flex-direction:column;
+}
+/* ---- top bar ---- */
+.top{display:flex; align-items:center; gap:16px; padding:16px 28px; border-bottom:1px solid var(--border)}
+.brand{display:flex; align-items:center; gap:10px; font-weight:700; letter-spacing:.2px}
+.logo{width:26px;height:26px;border-radius:7px;background:linear-gradient(135deg,var(--accent),#b07d1e);
+  display:grid;place-items:center;color:#0E1116;font-weight:800;font-size:15px;box-shadow:0 0 0 1px rgba(232,179,73,.3)}
+.brand small{color:var(--muted);font-weight:500;font-size:12px;border-left:1px solid var(--border);padding-left:10px;margin-left:2px}
+.top .spacer{flex:1}
+/* model selector */
+.model{position:relative}
+.model-btn{display:inline-flex;align-items:center;gap:8px;background:var(--raised);border:1px solid var(--border);
+  color:var(--text-2);padding:8px 12px;border-radius:var(--r-ctl);font:inherit;font-size:13px;cursor:pointer;transition:.15s}
+.model-btn:hover{border-color:var(--border-strong);color:var(--text)}
+.model-btn .dot{width:7px;height:7px;border-radius:50%;background:var(--accent);box-shadow:0 0 8px var(--accent)}
+.model-btn b{color:var(--text);font-weight:600}
+.model-pop{position:absolute;right:0;top:46px;width:320px;background:var(--raised);border:1px solid var(--border-strong);
+  border-radius:var(--r-card);padding:16px;box-shadow:0 18px 50px rgba(0,0,0,.55);z-index:40;display:none}
+.model-pop.open{display:block}
+.model-pop h4{font-size:12px;text-transform:uppercase;letter-spacing:.14em;color:var(--muted);margin-bottom:12px;font-weight:600}
+.field{margin-bottom:11px}
+.field label{display:block;font-size:11px;color:var(--text-2);margin-bottom:5px}
+.field input,.field select{width:100%;background:var(--inset);border:1px solid var(--border);color:var(--text);
+  border-radius:var(--r-ctl);padding:8px 10px;font:inherit;font-size:13px}
+.field input:focus,.field select:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.pop-note{font-size:11px;color:var(--muted);margin-top:6px;line-height:1.45}
+/* ---- hero ---- */
+main{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:48px 24px 64px;text-align:center}
+.eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.22em;text-transform:uppercase;color:var(--accent);margin-bottom:20px}
+h1{font-size:clamp(30px,5vw,52px);line-height:1.08;font-weight:700;letter-spacing:-.02em;max-width:16ch;margin:0 auto}
+h1 .hl{color:var(--accent)}
+.sub{margin:20px auto 0;max-width:54ch;color:var(--text-2);font-size:clamp(15px,2vw,17px)}
+.sub .pipe{color:var(--muted);margin:0 8px}
+/* dropzone */
+.zone{width:min(720px,100%);margin:40px auto 0;background:var(--surface);border:1.5px dashed var(--border-strong);
+  border-radius:16px;padding:44px 32px;cursor:pointer;transition:.18s;position:relative;text-align:center}
+.zone:hover{border-color:var(--accent);background:#171d26}
+.zone.drag{border-color:var(--accent);background:rgba(232,179,73,.06);box-shadow:0 0 0 4px var(--accent-soft)}
+.zone.filled{border-style:solid;border-color:var(--success);background:rgba(63,185,80,.05);cursor:default}
+.zone .ico{width:46px;height:46px;margin:0 auto 16px;color:var(--accent)}
+.zone .ico svg{width:100%;height:100%}
+.zone h3{font-size:18px;font-weight:600;margin-bottom:6px}
+.zone h3 u{color:var(--accent);text-decoration:none;border-bottom:1.5px solid var(--accent)}
+.zone p{color:var(--muted);font-size:13px}
+.zone .err{color:var(--danger);font-size:13px;margin-top:12px;display:none}
+.zone.err-on .err{display:block}
+/* filled meta */
+.filemeta{display:none;align-items:center;gap:14px;justify-content:center;text-align:left}
+.zone.filled .filemeta{display:flex}
+.zone.filled .empty{display:none}
+.filemeta .fi{width:40px;height:40px;border-radius:9px;background:var(--accent-soft);display:grid;place-items:center;color:var(--accent);flex:none}
+.filemeta .fn{font-weight:600}
+.filemeta .fd{color:var(--text-2);font-size:13px}
+.filemeta .chk{color:var(--success);font-size:13px;display:flex;align-items:center;gap:5px;margin-top:2px}
+.reset{background:none;border:1px solid var(--border);color:var(--text-2);border-radius:var(--r-ctl);
+  padding:7px 12px;font:inherit;font-size:12px;cursor:pointer;margin-left:6px}
+.reset:hover{border-color:var(--border-strong);color:var(--text)}
+/* samples */
+.samples{margin:26px auto 0;display:flex;gap:12px;flex-wrap:wrap;justify-content:center;align-items:center}
+.samples .lbl{color:var(--muted);font-size:13px}
+.chip{background:var(--raised);border:1px solid var(--border);color:var(--text);border-radius:999px;
+  padding:9px 16px;font:inherit;font-size:13px;cursor:pointer;transition:.15s;display:inline-flex;align-items:center;gap:8px}
+.chip:hover{border-color:var(--accent);color:var(--accent)}
+.chip.on{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}
+.chip .tag{font-family:var(--mono);font-size:11px;color:var(--muted)}
+.chip.on .tag{color:var(--accent)}
+/* action row */
+.actions{margin:34px auto 0;display:flex;gap:14px;align-items:center;flex-wrap:wrap;justify-content:center}
+.lang{display:flex;align-items:center;gap:8px;color:var(--text-2);font-size:13px}
+.lang select{background:var(--raised);border:1px solid var(--border);color:var(--text);border-radius:var(--r-ctl);
+  padding:9px 12px;font:inherit;font-size:13px}
+.start{display:inline-flex;align-items:center;gap:10px;background:var(--accent);color:#0E1116;border:none;
+  border-radius:var(--r-ctl);padding:13px 26px;font:inherit;font-size:15px;font-weight:700;cursor:pointer;transition:.15s;
+  box-shadow:0 8px 24px rgba(232,179,73,.22)}
+.start:hover{background:var(--accent-hover)}
+.start:disabled{background:var(--raised);color:var(--muted);cursor:not-allowed;box-shadow:none}
+.start svg{width:17px;height:17px}
+/* feature strip */
+.feats{display:flex;gap:34px;flex-wrap:wrap;justify-content:center;margin-top:54px;border-top:1px solid var(--border);padding-top:30px;width:min(820px,100%)}
+.feat{max-width:230px;text-align:center}
+.feat .ft{font-weight:600;font-size:14px;margin-bottom:4px;display:flex;align-items:center;gap:7px;justify-content:center}
+.feat .ft .d{width:6px;height:6px;border-radius:50%;background:var(--accent)}
+.feat p{color:var(--muted);font-size:12.5px;line-height:1.5}
+input[type=file]{display:none}
+@media(max-width:640px){
+  .top{padding:14px 18px}
+  .brand small{display:none}
+  main{padding:36px 18px 48px}
+  .zone{padding:34px 20px}
+  .feats{gap:22px}
+}
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="logo">◧</span>ScriptForge<small>小说 → 剧本</small></div>
+  <div class="spacer"></div>
+  <div class="model" id="model">
+    <button class="model-btn" id="modelBtn" aria-haspopup="true">
+      <span class="dot"></span>模型 <b id="modelName">stub</b>
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+    </button>
+    <div class="model-pop" id="modelPop">
+      <h4>通用模型适配器</h4>
+      <div class="field"><label>Provider</label>
+        <select id="provider"><option>stub（离线演示·无需 Key）</option><option>OpenAI</option><option>DeepSeek</option><option>Anthropic</option><option>本地 Ollama</option></select></div>
+      <div class="field"><label>Base URL</label><input id="baseUrl" value="https://api.stub.local/v1" /></div>
+      <div class="field"><label>Model</label><input id="modelId" value="scriptforge-stub-1" /></div>
+      <div class="field"><label>API Key</label><input id="apiKey" type="password" placeholder="sk-····（stub 模式可留空）" /></div>
+      <p class="pop-note">默认 <b style="color:var(--text-2)">stub</b> 模式无需 API Key，即可走完整流程演示。切换 provider 后会带入对应 Base URL 模板。</p>
+    </div>
+  </div>
+</header>
+
+<main>
+  <div class="eyebrow">AI 小说改编工作台</div>
+  <h1>把你的小说，<br>一键变成<span class="hl">可拍摄的剧本</span>初稿</h1>
+  <p class="sub">小说 → 结构化剧本 (YAML)<span class="pipe">·</span>跨章角色一致<span class="pipe">·</span>场景卡片可视化编辑</p>
+
+  <div class="zone" id="zone" tabindex="0" role="button" aria-label="上传小说文件">
+    <div class="empty">
+      <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 16v3a1 1 0 001 1h14a1 1 0 001-1v-3"/></svg></div>
+      <h3>将小说 <u>.txt</u> 拖到这里，或点击上传</h3>
+      <p>建议 ≥ 3 章 · 支持中文 / English · 自动按章节标记切分</p>
+      <div class="err" id="err">未检测到 3 个章节，请检查章节标记（如「第X章」「Chapter X」）。</div>
+    </div>
+    <div class="filemeta">
+      <span class="fi"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/></svg></span>
+      <div>
+        <div class="fn" id="fname">huozhe-excerpt.txt</div>
+        <div class="fd" id="fdesc">中文 · 12,480 字 · 检测到 3 章</div>
+        <div class="chk"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M20 6L9 17l-5-5"/></svg>章节结构有效</div>
+      </div>
+      <button class="reset" id="reset">更换</button>
+    </div>
+  </div>
+  <input type="file" id="file" accept=".txt,text/plain" />
+
+  <div class="samples">
+    <span class="lbl">或试试内置示例：</span>
+    <button class="chip" data-sample="huozhe" data-name="huozhe-excerpt.txt" data-desc="中文 · 12,480 字 · 检测到 3 章">《活着》节选 <span class="tag">中文·3章</span></button>
+    <button class="chip" data-sample="gift" data-name="the-gift.txt" data-desc="English · 9,210 words · 3 chapters detected">The Gift <span class="tag">EN·3章</span></button>
+  </div>
+
+  <div class="actions">
+    <div class="lang">语言：
+      <select id="lang"><option value="auto">自动检测</option><option value="zh">中文</option><option value="en">English</option></select>
+    </div>
+    <button class="start" id="start" disabled>
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>开始生成剧本
+    </button>
+  </div>
+
+  <div class="feats">
+    <div class="feat"><div class="ft"><span class="d"></span>过程可见</div><p>章节切分、角色识别、场景生成逐步流式呈现，AI 不是黑盒。</p></div>
+    <div class="feat"><div class="ft"><span class="d"></span>结构即编辑</div><p>场景卡片与 YAML 双向同步，改任一侧另一侧即时刷新。</p></div>
+    <div class="feat"><div class="ft"><span class="d"></span>可信可溯源</div><p>每个场景可回看原文片段，质量分量化改编完整度。</p></div>
+  </div>
+</main>
+
+<script>
+(function(){
+  var zone=document.getElementById('zone'), fileIn=document.getElementById('file'),
+      start=document.getElementById('start'), err=document.getElementById('err'),
+      reset=document.getElementById('reset');
+  var selected=null;
+
+  function setFilled(name,desc){
+    selected={name:name,desc:desc};
+    document.getElementById('fname').textContent=name;
+    document.getElementById('fdesc').textContent=desc;
+    zone.classList.remove('err-on'); zone.classList.add('filled');
+    start.disabled=false;
+  }
+  function clearSel(){
+    selected=null; zone.classList.remove('filled','err-on'); start.disabled=true;
+    document.querySelectorAll('.chip').forEach(function(c){c.classList.remove('on')});
+    fileIn.value='';
+  }
+  // dropzone click/keyboard
+  zone.addEventListener('click',function(e){ if(e.target.closest('#reset'))return; if(!zone.classList.contains('filled'))fileIn.click(); });
+  zone.addEventListener('keydown',function(e){ if((e.key==='Enter'||e.key===' ')&&!zone.classList.contains('filled')){e.preventDefault();fileIn.click();} });
+  reset.addEventListener('click',function(e){e.stopPropagation();clearSel();});
+  // drag
+  ;['dragenter','dragover'].forEach(function(ev){zone.addEventListener(ev,function(e){e.preventDefault();if(!zone.classList.contains('filled'))zone.classList.add('drag');});});
+  ;['dragleave','drop'].forEach(function(ev){zone.addEventListener(ev,function(e){e.preventDefault();zone.classList.remove('drag');});});
+  zone.addEventListener('drop',function(e){ var f=e.dataTransfer.files[0]; if(f)handleFile(f); });
+  fileIn.addEventListener('change',function(){ if(fileIn.files[0])handleFile(fileIn.files[0]); });
+
+  function handleFile(f){
+    if(!/\.txt$/i.test(f.name)){ zone.classList.add('err-on'); err.textContent='仅支持 .txt 纯文本文件。'; return; }
+    // demo heuristic: tiny files "fail" the 3-chapter check
+    if(f.size<400){ zone.classList.add('err-on'); err.textContent='未检测到 3 个章节，请检查章节标记（如「第X章」「Chapter X」）。'; return; }
+    var kb=(f.size/1024).toFixed(0);
+    setFilled(f.name, '上传文件 · '+kb+' KB · 解析章节中…');
+    setTimeout(function(){ document.getElementById('fdesc').textContent='中文 · '+kb+' KB · 检测到 3 章'; },650);
+  }
+  // samples
+  document.querySelectorAll('.chip').forEach(function(c){
+    c.addEventListener('click',function(){
+      document.querySelectorAll('.chip').forEach(function(x){x.classList.remove('on')});
+      c.classList.add('on');
+      setFilled(c.dataset.name, c.dataset.desc);
+    });
+  });
+  // model popover
+  var mBtn=document.getElementById('modelBtn'), mPop=document.getElementById('modelPop'),
+      prov=document.getElementById('provider'), baseUrl=document.getElementById('baseUrl'),
+      mName=document.getElementById('modelName');
+  var BASE={ 'stub（离线演示·无需 Key）':'https://api.stub.local/v1','OpenAI':'https://api.openai.com/v1',
+    'DeepSeek':'https://api.deepseek.com/v1','Anthropic':'https://api.anthropic.com/v1','本地 Ollama':'http://localhost:11434/v1' };
+  mBtn.addEventListener('click',function(e){e.stopPropagation();mPop.classList.toggle('open');});
+  document.addEventListener('click',function(e){ if(!document.getElementById('model').contains(e.target))mPop.classList.remove('open'); });
+  prov.addEventListener('change',function(){
+    baseUrl.value=BASE[prov.value]||'';
+    mName.textContent = prov.value.indexOf('stub')>=0?'stub':prov.value.split('（')[0];
+  });
+  // start
+  start.addEventListener('click',function(){
+    if(!selected)return;
+    try{ localStorage.setItem('sf:source', JSON.stringify({name:selected.name,lang:document.getElementById('lang').value,model:mName.textContent})); }catch(_){}
+    location.href='progress.html';
+  });
+})();
+</script>
+</body>
+</html>
