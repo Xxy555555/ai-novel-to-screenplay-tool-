@@ -1,0 +1,169 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://scriptforge.local/screenplay.schema.json",
+  "title": "ScriptForge Screenplay",
+  "description": "小说转剧本的结构化输出契约。顶层 meta / characters / scenes / report；场景持有有序异构元素流，角色为以 id 引用的注册表。逐字段设计原因见 docs/yaml-schema-design.md。",
+  "type": "object",
+  "required": ["meta", "characters", "scenes"],
+  "properties": {
+    "meta": {
+      "type": "object",
+      "description": "作品元信息",
+      "required": ["title"],
+      "properties": {
+        "title": { "type": "string", "minLength": 1, "description": "改编后剧本标题" },
+        "source_title": { "type": "string", "description": "原著信息（改编自…）" },
+        "author": { "type": "string", "description": "原著作者" },
+        "language": { "type": "string", "description": "主要语言：zh / en" },
+        "generated_by": { "type": "string", "description": "生成所用模型标识（provider/model）" }
+      }
+    },
+
+    "characters": {
+      "type": "array",
+      "description": "角色注册表：单一事实源，场景与元素均以 id 引用，防止跨章名字漂移",
+      "items": {
+        "type": "object",
+        "required": ["id", "name"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^C[0-9]+$",
+            "description": "唯一角色标识，形如 C01"
+          },
+          "name": { "type": "string", "minLength": 1, "description": "规范化主名" },
+          "role": { "type": "string", "description": "角色定位，如 主角 / 反派 / 配角" },
+          "aliases": {
+            "type": "array",
+            "description": "消解后归并到本角色的所有称谓",
+            "items": { "type": "string" }
+          },
+          "tone": { "type": "string", "description": "说话口吻 / 性格基调" },
+          "relations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["target", "relation"],
+              "properties": {
+                "target": { "type": "string", "description": "关系对端角色名或 id" },
+                "relation": { "type": "string", "description": "关系描述，如 妻 / 赌友" }
+              }
+            }
+          },
+          "first_appearance": { "type": "string", "description": "首次登场章节" }
+        }
+      }
+    },
+
+    "scenes": {
+      "type": "array",
+      "description": "场景序列，按播放顺序排列",
+      "items": {
+        "type": "object",
+        "required": ["id", "heading", "elements"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^S[0-9]+$",
+            "description": "唯一场景标识，形如 S1"
+          },
+          "chapter": { "type": "string", "description": "来源章节" },
+          "heading": {
+            "type": "object",
+            "description": "场景头三要素；time_of_day 可缺失（缺失为质量警告而非 Schema 非法）",
+            "required": ["int_ext", "location"],
+            "properties": {
+              "int_ext": {
+                "type": "string",
+                "enum": ["INT", "EXT"],
+                "description": "内景 INT / 外景 EXT"
+              },
+              "location": { "type": "string", "minLength": 1, "description": "地点" },
+              "time_of_day": { "type": "string", "description": "时间，如 日 / 夜 / DAY / NIGHT" }
+            }
+          },
+          "present_characters": {
+            "type": "array",
+            "description": "在场角色 id 列表",
+            "items": { "type": "string", "pattern": "^C[0-9]+$" }
+          },
+          "elements": {
+            "type": "array",
+            "description": "有序异构元素流，还原剧本页面",
+            "items": { "$ref": "#/definitions/element" }
+          },
+          "mood": { "type": "string", "description": "情绪基调（标注层）" },
+          "pacing": { "type": "string", "description": "节奏标签（标注层）" },
+          "shots": {
+            "type": "array",
+            "description": "分镜 / 机位建议（标注层）",
+            "items": { "type": "string" }
+          },
+          "source": { "type": "string", "description": "原文溯源片段" }
+        }
+      }
+    },
+
+    "report": {
+      "type": "object",
+      "description": "改编质量报告",
+      "properties": {
+        "score": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "grade": { "type": "string" },
+        "schema_valid": { "type": "boolean" },
+        "schema_error_count": { "type": "integer", "minimum": 0 },
+        "dialogue_attribution_rate": { "type": "number", "minimum": 0, "maximum": 1 },
+        "character_consistency_rate": { "type": "number", "minimum": 0, "maximum": 1 },
+        "scene_heading_completeness_rate": { "type": "number", "minimum": 0, "maximum": 1 },
+        "show_vs_tell_ratio": { "type": "number", "minimum": 0 },
+        "scene_count": { "type": "integer", "minimum": 0 },
+        "character_count": { "type": "integer", "minimum": 0 },
+        "avg_elements_per_scene": { "type": "number", "minimum": 0 },
+        "issues": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["message"],
+            "properties": {
+              "scene_id": { "type": "string" },
+              "message": { "type": "string" },
+              "severity": {
+                "type": "string",
+                "enum": ["error", "warning", "info"]
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+
+  "definitions": {
+    "element": {
+      "type": "object",
+      "description": "单个场景元素；凭 type 区分五种类型，按类型条件必填",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["action", "dialogue", "voiceover", "transition", "montage"]
+        },
+        "text": { "type": "string", "description": "叙述性文本（action / montage / transition）" },
+        "character": { "type": "string", "pattern": "^C[0-9]+$", "description": "说话人角色 id（dialogue / voiceover）" },
+        "line": { "type": "string", "description": "台词（dialogue / voiceover）" },
+        "parenthetical": { "type": "string", "description": "情绪 / 动作提示" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "enum": ["dialogue", "voiceover"] } } },
+          "then": { "required": ["character", "line"] }
+        },
+        {
+          "if": { "properties": { "type": { "enum": ["action", "montage", "transition"] } } },
+          "then": { "required": ["text"] }
+        }
+      ]
+    }
+  }
+}

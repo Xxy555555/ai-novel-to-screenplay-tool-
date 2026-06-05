@@ -15,7 +15,9 @@ spring:
       max-request-size: 10MB
   jackson:
     property-naming-strategy: SNAKE_CASE
-    default-property-inclusion: non_null
+    # non_empty：在 non_null 基础上额外省略空集合/空字符串，使输出 YAML 干净，
+    # 同时领域模型可把集合字段默认成空集合以避免下游空指针。
+    default-property-inclusion: non_empty
     serialization:
       indent-output: true
 
