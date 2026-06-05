@@ -4,7 +4,7 @@
   "title": "ScriptForge Screenplay",
   "description": "小说转剧本的结构化输出契约。顶层 meta / characters / scenes / report；场景持有有序异构元素流，角色为以 id 引用的注册表。逐字段设计原因见 docs/yaml-schema-design.md。",
   "type": "object",
-  "required": ["meta", "characters", "scenes"],
+  "required": ["meta", "scenes"],
   "properties": {
     "meta": {
       "type": "object",
