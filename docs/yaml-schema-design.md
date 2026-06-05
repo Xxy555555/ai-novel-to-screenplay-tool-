@@ -167,8 +167,12 @@ scenes:
 | `dialogue` | `character` + `line`（可选 `parenthetical`） | 对白 |
 | `voiceover` | `character` + `line`（可选 `parenthetical`） | 画外音 V.O.（心理描写转写） |
 
-Schema 用 `if/then` 表达条件必填：`dialogue`/`voiceover` 必须有 `character` 且 `line`；
+Schema 用 `if/then` 表达条件必填：`dialogue`/`voiceover` 必须有 `line`；
 `action`/`montage`/`transition` 必须有 `text`。
+
+> **`character` 故意可选**：对白说话人归属率是质量指标（目标 ≥90%），与 `time_of_day` 同理——
+> 缺说话人应表现为**质量警告**（前端「S7 有1句对白未归属」可定位）、由 `QualityReporter` 度量，
+> 而非升级为 Schema 非法。这样既能展示「可量化、可定位」，又不把软问题变成硬错误。
 
 | 字段 | 类型 | 约束 |
 |------|------|------|

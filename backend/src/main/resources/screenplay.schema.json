@@ -157,7 +157,7 @@
       "allOf": [
         {
           "if": { "properties": { "type": { "enum": ["dialogue", "voiceover"] } } },
-          "then": { "required": ["character", "line"] }
+          "then": { "required": ["line"] }
         },
         {
           "if": { "properties": { "type": { "enum": ["action", "montage", "transition"] } } },
