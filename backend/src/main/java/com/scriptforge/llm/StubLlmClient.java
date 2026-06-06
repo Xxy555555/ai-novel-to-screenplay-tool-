@@ -89,11 +89,14 @@ public class StubLlmClient implements LlmClient {
 
     // ───────────────────────── 规则抽取 ─────────────────────────
 
-    private static final Pattern ZH_DIALOGUE = Pattern.compile("「([^」]*)」");
+    // 同时支持直角引号「」与全角双引号“ ”（中文网文绝大多数用后者）。
+    private static final Pattern ZH_DIALOGUE = Pattern.compile("[「“]([^」”]*)[」”]");
     private static final Pattern EN_DIALOGUE = Pattern.compile("\"([^\"]{2,})\"");
     // 中文说话人：名字(2-4汉字) + 可选修饰 + 说/道/问 等
+    // 非贪婪捕名 + 多字动词（说道/笑道…）优先，避免把「说」并进名字（如「林萧说道」误成「林萧说」）。
     private static final Pattern ZH_SPEAKER = Pattern.compile(
-            "([\\u4e00-\\u9fa5]{2,4})(?:冷冷|轻轻|缓缓|急急|低声|高声|笑着|叹|颤声)?(?:地|着)?(?:说|道|问|喊|叫|答|应|嚷)");
+            "([\\u4e00-\\u9fa5]{2,4}?)(?:冷冷|轻轻|缓缓|急急|低声|高声|笑着|淡淡|叹|颤声)?(?:地|着)?"
+                    + "(?:说道|笑道|问道|喝道|答道|喊道|说|道|问|喊|叫|答|应|嚷)");
     private static final Pattern EN_SPEAKER = Pattern.compile(
             "([A-Z][a-zA-Z.]+(?:\\s[A-Z][a-z]+)?)\\s+(?:said|asked|replied|whispered|cried|shouted|murmured|answered)"
                     + "|(?:said|asked|replied|whispered|cried|shouted|murmured|answered)\\s+([A-Z][a-zA-Z.]+)");
@@ -232,14 +235,21 @@ public class StubLlmClient implements LlmClient {
         }
     }
 
-    /** 通用识别的姓名可信度过滤：中文 2-3 字且不含虚词/代词；英文首字母大写。 */
+    // 常见会出现在「…说道」前、但并非姓名的副词/连词，剔除以减少误捕。
+    private static final java.util.Set<String> COMMON_NONAME = java.util.Set.of(
+            "如果", "自然", "然后", "可是", "但是", "于是", "突然", "果然", "竟然", "居然", "当然", "依然",
+            "显然", "因为", "所以", "不过", "接着", "随后", "随即", "旋即", "这时", "那时", "此时", "顿时",
+            "立刻", "立即", "闻言", "说完", "见状", "心中", "片刻", "半晌", "许久", "忽然", "猛然", "似乎",
+            "仿佛", "好像", "也许", "或许", "到底", "究竟", "难道", "其实", "原来", "本来", "已经", "正在");
+
+    /** 通用识别的姓名可信度过滤：中文 2-3 字、不含虚词/代词、且非常见副词/连词；英文首字母大写。 */
     private static boolean plausibleName(String name, boolean zh) {
         if (name.isBlank()) {
             return false;
         }
         if (zh) {
             int len = name.length();
-            return len >= 2 && len <= 3 && !ZH_NON_NAME.matcher(name).find();
+            return len >= 2 && len <= 3 && !ZH_NON_NAME.matcher(name).find() && !COMMON_NONAME.contains(name);
         }
         return Character.isUpperCase(name.charAt(0));
     }
