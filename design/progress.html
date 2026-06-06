@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>生成剧本中 · ScriptForge</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+:root{
+  --bg:#0E1116;--surface:#161B22;--raised:#1C232D;--inset:#0A0D12;
+  --border:#2A3441;--border-strong:#3A4654;
+  --text:#E6EDF3;--text-2:#9DA7B3;--muted:#6E7681;
+  --accent:#E8B349;--accent-hover:#F2C45E;--accent-soft:rgba(232,179,73,.14);
+  --success:#3FB950;--warning:#D29922;--danger:#F85149;--info:#58A6FF;
+  --ui:'Inter','Noto Sans SC',system-ui,-apple-system,sans-serif;
+  --mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{font-family:var(--ui);background:var(--bg);color:var(--text);-webkit-font-smoothing:antialiased;line-height:1.5;display:flex;flex-direction:column}
+.top{display:flex;align-items:center;gap:14px;padding:16px 28px;border-bottom:1px solid var(--border)}
+.brand{display:flex;align-items:center;gap:10px;font-weight:700}
+.logo{width:26px;height:26px;border-radius:7px;background:linear-gradient(135deg,var(--accent),#b07d1e);display:grid;place-items:center;color:#0E1116;font-weight:800;font-size:15px}
+.brand small{color:var(--muted);font-weight:500;font-size:12px;border-left:1px solid var(--border);padding-left:10px}
+.top .spacer{flex:1}
+.cancel{background:none;border:1px solid var(--border);color:var(--text-2);border-radius:6px;padding:8px 14px;font:inherit;font-size:13px;cursor:pointer}
+.cancel:hover{border-color:var(--danger);color:var(--danger)}
+main{flex:1;width:min(1080px,100%);margin:0 auto;padding:40px 28px 56px}
+.head{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}
+.head h1{font-size:24px;font-weight:700;letter-spacing:-.01em}
+.head .pct{font-family:var(--mono);font-size:24px;color:var(--accent);font-weight:500;margin-left:auto}
+.bar{height:8px;background:var(--inset);border-radius:999px;margin:18px 0 6px;overflow:hidden;border:1px solid var(--border)}
+.bar .fill{height:100%;width:0;background:linear-gradient(90deg,#b07d1e,var(--accent));border-radius:999px;transition:width .5s ease}
+.eta{font-size:12px;color:var(--muted);font-family:var(--mono)}
+/* stepper */
+.steps{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:30px 0}
+.step{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px 16px 15px;position:relative;overflow:hidden;transition:.25s}
+.step.active{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.step.done{border-color:rgba(63,185,80,.4)}
+.step .n{display:flex;align-items:center;gap:9px;margin-bottom:9px}
+.step .badge{width:24px;height:24px;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:700;font-family:var(--mono);
+  background:var(--raised);color:var(--muted);border:1px solid var(--border);flex:none}
+.step.active .badge{background:var(--accent);color:#0E1116;border-color:var(--accent)}
+.step.done .badge{background:rgba(63,185,80,.16);color:var(--success);border-color:rgba(63,185,80,.4)}
+.step .ti{font-weight:600;font-size:14px}
+.step .st{font-size:12px;color:var(--muted);display:flex;align-items:center;gap:6px}
+.step.active .st{color:var(--accent)}
+.step.done .st{color:var(--success)}
+.spin{width:11px;height:11px;border:2px solid var(--accent);border-top-color:transparent;border-radius:50%;animation:sp .7s linear infinite;display:inline-block}
+@keyframes sp{to{transform:rotate(360deg)}}
+.step .line{position:absolute;left:0;bottom:0;height:2px;width:0;background:var(--accent);transition:width .4s}
+/* panels */
+.panels{display:grid;grid-template-columns:1.5fr 1fr;gap:18px}
+.panel{background:var(--surface);border:1px solid var(--border);border-radius:10px;display:flex;flex-direction:column;min-height:340px}
+.panel h3{font-size:12px;text-transform:uppercase;letter-spacing:.12em;color:var(--text-2);padding:14px 16px;border-bottom:1px solid var(--border);font-weight:600;display:flex;align-items:center;gap:8px}
+.panel h3 .c{font-family:var(--mono);color:var(--muted);margin-left:auto;font-size:12px}
+.log{padding:8px 0;overflow-y:auto;flex:1;max-height:360px}
+.logrow{display:flex;gap:10px;padding:7px 16px;font-size:13px;animation:in .3s ease;align-items:flex-start}
+@keyframes in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.logrow .ic{flex:none;margin-top:1px}
+.logrow.ok .ic{color:var(--success)}
+.logrow.run .ic{color:var(--accent)}
+.logrow.info .ic{color:var(--info)}
+.logrow .tx{color:var(--text-2)}
+.logrow .tx b{color:var(--text);font-weight:600}
+.logrow .tx .mono{font-family:var(--mono);color:var(--accent);font-size:12px}
+.chars{padding:8px;overflow-y:auto;flex:1;max-height:360px}
+.charrow{display:flex;align-items:center;gap:11px;padding:9px 10px;border-radius:8px;animation:in .35s ease}
+.charrow:hover{background:var(--raised)}
+.av{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;font-weight:700;font-size:13px;flex:none;
+  background:var(--accent-soft);color:var(--accent);border:1px solid rgba(232,179,73,.3)}
+.charrow .nm{font-weight:600;font-size:14px}
+.charrow .al{font-size:12px;color:var(--muted)}
+.foot{text-align:center;margin-top:30px;color:var(--muted);font-size:13px}
+.foot .go{display:none;color:var(--accent);font-weight:600}
+.foot .go.show{display:inline-flex;align-items:center;gap:8px;animation:in .4s}
+@media(max-width:860px){.steps{grid-template-columns:repeat(2,1fr)}.panels{grid-template-columns:1fr}}
+@media(max-width:560px){.top{padding:14px 18px}main{padding:28px 18px 40px}.head h1{font-size:20px}}
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="logo">◧</span>ScriptForge<small id="proj">《活着》改编</small></div>
+  <div class="spacer"></div>
+  <button class="cancel" id="cancel">取消生成</button>
+</header>
+<main>
+  <div class="head">
+    <h1>正在生成剧本…</h1>
+    <span class="pct" id="pct">0%</span>
+  </div>
+  <div class="bar"><div class="fill" id="fill"></div></div>
+  <div class="eta" id="eta">已发现 0 角色 · 0 场景</div>
+
+  <div class="steps" id="steps">
+    <div class="step" data-k="0"><div class="n"><span class="badge">1</span><span class="ti">章节切分</span></div><div class="st" id="st0">待处理</div><div class="line"></div></div>
+    <div class="step" data-k="1"><div class="n"><span class="badge">2</span><span class="ti">理解 · 角色圣经</span></div><div class="st" id="st1">待处理</div><div class="line"></div></div>
+    <div class="step" data-k="2"><div class="n"><span class="badge">3</span><span class="ti">生成剧本</span></div><div class="st" id="st2">待处理</div><div class="line"></div></div>
+    <div class="step" data-k="3"><div class="n"><span class="badge">4</span><span class="ti">质量校验</span></div><div class="st" id="st3">待处理</div><div class="line"></div></div>
+  </div>
+
+  <div class="panels">
+    <div class="panel">
+      <h3>实时日志 <span class="c" id="logc">SSE</span></h3>
+      <div class="log" id="log"></div>
+    </div>
+    <div class="panel">
+      <h3>已发现角色 <span class="c" id="charc">0</span></h3>
+      <div class="chars" id="charsBox"></div>
+    </div>
+  </div>
+
+  <div class="foot">
+    <span id="waiting">完成后将自动进入工作台 · 你也可以稍候手动进入</span>
+    <a class="go" id="go" href="workbench.html">进入工作台
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a>
+  </div>
+</main>
+<script>
+(function(){
+  try{var src=JSON.parse(localStorage.getItem('sf:source')||'{}'); if(src.name&&src.name.indexOf('gift')>=0)document.getElementById('proj').textContent='The Gift · adaptation';}catch(_){}
+  var log=document.getElementById('log'), charsBox=document.getElementById('charsBox'),
+      fill=document.getElementById('fill'), pct=document.getElementById('pct'),
+      eta=document.getElementById('eta'), charc=document.getElementById('charc');
+  var nChar=0,nScene=0,cancelled=false;
+
+  function icon(kind){
+    if(kind==='ok')return '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3"><path d="M20 6L9 17l-5-5"/></svg>';
+    if(kind==='run')return '<span class="spin"></span>';
+    return '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l3 2"/></svg>';
+  }
+  function addLog(kind,html){
+    var r=document.createElement('div'); r.className='logrow '+kind;
+    r.innerHTML='<span class="ic">'+icon(kind)+'</span><span class="tx">'+html+'</span>';
+    log.appendChild(r); log.scrollTop=log.scrollHeight;
+  }
+  function addChar(name,alias){
+    nChar++; charc.textContent=nChar;
+    var r=document.createElement('div'); r.className='charrow';
+    r.innerHTML='<span class="av">'+name.charAt(0)+'</span><div><div class="nm">'+name+'</div><div class="al">'+alias+'</div></div>';
+    charsBox.appendChild(r);
+    eta.textContent='已发现 '+nChar+' 角色 · '+nScene+' 场景';
+  }
+  function setStep(k,state){
+    var el=document.querySelector('.step[data-k="'+k+'"]'), st=document.getElementById('st'+k);
+    el.classList.remove('active','done');
+    if(state==='active'){el.classList.add('active');st.innerHTML='<span class="spin"></span> 进行中';}
+    else if(state==='done'){el.classList.add('done');st.innerHTML='✓ 完成';el.querySelector('.line').style.width='100%';}
+  }
+  function setPct(p){p=Math.min(100,Math.round(p));fill.style.width=p+'%';pct.textContent=p+'%';}
+
+  // scripted SSE timeline
+  var T=[
+    [200,function(){setStep(0,'active');addLog('run','开始解析上传文本…');setPct(4);}],
+    [900,function(){addLog('ok','按章节标记切分到 <b>3 章</b> <span class="mono">ch.1 / ch.2 / ch.3</span>');setPct(14);}],
+    [1500,function(){setStep(0,'done');setStep(1,'active');addLog('info','进入语义理解，构建<b>角色圣经</b>…');setPct(20);}],
+    [2100,function(){addLog('ok','第1章 → 识别角色 <b>福贵</b>、<b>家珍</b>');addChar('福贵','别名：我 / 老爷');setPct(30);}],
+    [2700,function(){addChar('家珍','别名：她 / 女人');addLog('ok','建立关系 <span class="mono">家珍 = 福贵之妻</span>');setPct(38);}],
+    [3300,function(){addLog('run','第2章 → 实体消解：归并别名「<b>老爷</b>」→ 福贵');setPct(45);}],
+    [3900,function(){addChar('龙二','反派 · 赌场');addLog('ok','第2章 → 新角色 <b>龙二</b>（跨章一致性已对齐）');setPct(52);}],
+    [4500,function(){setStep(1,'done');setStep(2,'active');addLog('info','开始生成结构化剧本场景…');setPct(58);}],
+    [5100,function(){nScene=2;addLog('ok','切出场景 <span class="mono">S2 内·走廊·夜</span> · <span class="mono">S3 内·赌场·夜</span>');eta.textContent='已发现 '+nChar+' 角色 · '+nScene+' 场景';setPct(68);}],
+    [5700,function(){nScene=4;addChar('凤霞','福贵之女');addLog('ok','第3章 → 场景 S4 / S5 · 新角色 <b>凤霞</b>');eta.textContent='已发现 '+nChar+' 角色 · '+nScene+' 场景';setPct(78);}],
+    [6300,function(){nScene=12;addLog('ok','共生成 <b>12 个场景</b> · 对白已归属说话人');eta.textContent='已发现 '+nChar+' 角色 · '+nScene+' 场景';setPct(86);}],
+    [6900,function(){setStep(2,'done');setStep(3,'active');addLog('info','运行 Schema 校验与质量评分…');setPct(92);}],
+    [7600,function(){addLog('run','检测到 <b>S4</b> 场景头缺少时间 → 标记待人工补');setPct(96);}],
+    [8200,function(){setStep(3,'done');addLog('ok','质检完成 · 综合评分 <b style="color:var(--accent)">87 / 100</b> · Schema 合法');setPct(100);
+      document.getElementById('waiting').textContent='生成完成！正在进入工作台…';document.getElementById('go').classList.add('show');}],
+    [9400,function(){ if(!cancelled)location.href='workbench.html'; }]
+  ];
+  T.forEach(function(t){ setTimeout(function(){ if(!cancelled)t[1](); }, t[0]); });
+
+  document.getElementById('cancel').addEventListener('click',function(){
+    cancelled=true; addLog('info','已取消生成 · 返回上传页…'); setTimeout(function(){location.href='index.html';},700);
+  });
+})();
+</script>
+</body>
+</html>
