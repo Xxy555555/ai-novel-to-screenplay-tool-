@@ -16,3 +16,6 @@ Thumbs.db
 # 本地环境变量（API Key 等，切勿提交）
 .env
 .env.local
+
+# gstack 浏览器/工具本地数据
+.gstack/
