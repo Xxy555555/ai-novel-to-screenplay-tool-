@@ -1,5 +1,7 @@
 package com.scriptforge.model;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
+
 /**
  * 场景元素流中的单个元素。对应 schema 中 {@code scenes[].elements[]}。
  *
@@ -34,7 +36,8 @@ public record Element(
     public static final String TRANSITION = "transition";
     public static final String MONTAGE = "montage";
 
-    /** 是否为带说话人的元素（对白 / 画外音）。 */
+    /** 是否为带说话人的元素（对白 / 画外音）。{@code @JsonIgnore}：不作为字段序列化。 */
+    @JsonIgnore
     public boolean isSpoken() {
         return DIALOGUE.equals(type) || VOICEOVER.equals(type);
     }
