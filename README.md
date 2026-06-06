@@ -96,6 +96,15 @@ export SCRIPTFORGE_LLM_API_KEY=sk-ant-xxx
 
 默认 `provider=stub`：离线规则桩，无 Key 也能跑通全流程。
 
+**DeepSeek 一键脚本**（key 不入库）：把 key 写进 `backend/.deepseek.key`（已 gitignore）或设环境变量 `DEEPSEEK_API_KEY`，然后在 `backend/` 下：
+
+```powershell
+# 先打包：JAVA_HOME="D:/JDK/jdk17" "D:/Maven/apache-maven-3.9.9/bin/mvn" -DskipTests package
+"sk-你的key" | Out-File -Encoding ascii backend\.deepseek.key   # 方式一：写入文件
+.\backend\run-deepseek.ps1        # 用 DeepSeek 启动 :8080（Windows）
+# Git Bash / WSL: bash backend/run-deepseek.sh
+```
+
 ## 协作规范
 
 新增功能基于 PR 提交（详见 `CLAUDE.md`「PR 提交规范」）：每个 PR 只做一件事、四段式描述（标题/功能描述/实现思路/测试方式）、合并后主分支保持可运行。
