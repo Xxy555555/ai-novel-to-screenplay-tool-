@@ -18,5 +18,8 @@ Thumbs.db
 .env.local
 *.key
 
+# 根级测试小说（版权/体积，勿入库；内置示例在 backend/.../samples/）
+/*.txt
+
 # gstack 浏览器/工具本地数据
 .gstack/

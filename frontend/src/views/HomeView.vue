@@ -43,6 +43,20 @@ function analyzeText(text) {
   return { isZh, count, chapters }
 }
 
+// 编码自适应读取：优先按 UTF-8 严格解码；中文 txt 常为 GBK/GB2312（非法 UTF-8），回退 GB18030。
+async function readTextSmart(file) {
+  const buf = await file.arrayBuffer()
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(buf)
+  } catch (_) {
+    try {
+      return new TextDecoder('gb18030').decode(buf)
+    } catch (_2) {
+      return new TextDecoder('utf-8').decode(buf) // 兜底：非严格 UTF-8
+    }
+  }
+}
+
 async function handleFile(f) {
   submitError.value = ''
   if (!/\.txt$/i.test(f.name)) {
@@ -53,7 +67,7 @@ async function handleFile(f) {
   }
   let text = ''
   try {
-    text = await f.text()
+    text = await readTextSmart(f)
   } catch (_) {
     zoneError.value = '读取文件失败，请重试。'
     return
