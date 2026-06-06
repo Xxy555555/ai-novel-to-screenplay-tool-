@@ -35,6 +35,7 @@ scriptforge:
     timeout-seconds: 120
     chunk-size: 3500
     max-repair-retries: 2
+    max-tokens: 4096
 
 logging:
   level:
