@@ -1,37 +1,51 @@
 /*
- * 设计令牌（深色影视工作台主题）——对应 docs/UI-Prototype-Design.md 第 2 节。
- * 业务页面统一引用这些 CSS 变量，便于换肤。
+ * 设计令牌（深色影视工作台主题）—— 对应 docs/UI-Prototype-Design.md 第 2 节。
+ * 同时提供两套变量名：长名（--bg-base 等，App/早期占位用）与原型短名（--bg 等，
+ * design/*.html 移植的页面直接复用），全局可用，便于换肤。
  */
 :root {
-  /* 底色 / 表面 */
-  --bg-base: #0E1116;
-  --bg-surface: #161B22;
-  --bg-raised: #1C232D;
-  --bg-inset: #0A0D12;
-  --border-default: #2A3441;
-  --border-strong: #3A4654;
-
-  /* 文字 */
-  --text-primary: #E6EDF3;
-  --text-secondary: #9DA7B3;
-  --text-muted: #6E7681;
-
-  /* 强调与语义 */
-  --accent-primary: #E8B349;
-  --accent-hover: #F2C45E;
+  /* 长名（与早期骨架一致） */
+  --bg-base: #0e1116;
+  --bg-surface: #161b22;
+  --bg-raised: #1c232d;
+  --bg-inset: #0a0d12;
+  --border-default: #2a3441;
+  --border-strong: #3a4654;
+  --text-primary: #e6edf3;
+  --text-secondary: #9da7b3;
+  --text-muted: #6e7681;
+  --accent-primary: #e8b349;
+  --accent-hover: #f2c45e;
   --accent-soft: rgba(232, 179, 73, 0.14);
-  --success: #3FB950;
-  --warning: #D29922;
-  --danger: #F85149;
-  --info: #58A6FF;
+  --success: #3fb950;
+  --warning: #d29922;
+  --danger: #f85149;
+  --info: #58a6ff;
+
+  /* 原型短名（design/*.html 移植页面使用） */
+  --bg: #0e1116;
+  --surface: #161b22;
+  --raised: #1c232d;
+  --inset: #0a0d12;
+  --border: #2a3441;
+  --text: #e6edf3;
+  --text-2: #9da7b3;
+  --muted: #6e7681;
+  --accent: #e8b349;
 
   /* 剧本元素类型色 */
-  --el-action: #9DA7B3;
-  --el-dialogue: #2DD4BF;
-  --el-voiceover: #A78BFA;
-  --el-transition: #E8B349;
-  --el-montage: #F472B6;
-  --el-parenthetical: #6E7681;
+  --el-action: #9da7b3;
+  --el-dialogue: #2dd4bf;
+  --el-voiceover: #a78bfa;
+  --el-transition: #e8b349;
+  --el-montage: #f472b6;
+  --el-parenthetical: #6e7681;
+  --el-paren: #6e7681;
+
+  /* 字体 */
+  --ui: 'Inter', 'Noto Sans SC', system-ui, -apple-system, sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --script: 'Courier Prime', ui-monospace, monospace;
 
   /* 间距 / 圆角 */
   --space-1: 4px;
@@ -42,6 +56,8 @@
   --space-8: 32px;
   --radius-control: 6px;
   --radius-card: 10px;
+  --r-ctl: 6px;
+  --r-card: 10px;
 }
 
 * {
@@ -58,7 +74,21 @@ body,
 body {
   background: var(--bg-base);
   color: var(--text-primary);
-  font-family: 'Inter', 'Noto Sans SC', system-ui, -apple-system, sans-serif;
+  font-family: var(--ui);
   font-size: 14px;
   line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: #222a34;
+  border-radius: 8px;
+  border: 2px solid var(--bg);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #2f3a47;
 }
