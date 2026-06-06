@@ -1,0 +1,675 @@
+<script setup>
+import { ref, reactive, computed, onMounted, nextTick } from 'vue'
+import { useRouter } from 'vue-router'
+import { useMessage } from 'naive-ui'
+import jsyaml from 'js-yaml'
+import { useAppStore } from '@/stores/app'
+import { fetchScreenplay, validateYaml } from '@/api/http'
+
+const router = useRouter()
+const store = useAppStore()
+const message = useMessage()
+
+const TYPE_LABEL = { action: '动作', dialogue: '对白', voiceover: '画外音 V.O.', transition: '转场', montage: '蒙太奇' }
+const TYPE_VAR = { action: 'el-action', dialogue: 'el-dialogue', voiceover: 'el-voiceover', transition: 'el-transition', montage: 'el-montage' }
+
+const data = ref(null) // 响应式剧本（后端 snake_case 形状）
+const viewMode = ref('cards') // cards | yaml
+const yamlText = ref('')
+const selScene = ref('')
+const activeTab = ref('char') // char | qual
+const charSearch = ref('')
+const dimChar = ref('') // 点击角色高亮其对白
+const valid = ref(true)
+const validText = ref('合法')
+const drawerOpen = ref(false)
+const exportOpen = ref(false)
+const modelOpen = ref(false)
+
+// ───────── 载入 ─────────
+onMounted(async () => {
+  let sp = store.screenplay
+  if (!sp && store.sessionId) {
+    try {
+      sp = await fetchScreenplay(store.sessionId)
+    } catch (_) {
+      sp = null
+    }
+  }
+  if (!sp) {
+    router.replace('/')
+    return
+  }
+  data.value = reactive(normalize(sp))
+  selScene.value = data.value.scenes[0]?.id || ''
+  document.addEventListener('click', onDocClick)
+})
+
+function normalize(sp) {
+  // 深拷贝并补齐可能缺失的集合，避免模板空引用。
+  const clone = JSON.parse(JSON.stringify(sp))
+  clone.meta = clone.meta || {}
+  clone.characters = clone.characters || []
+  clone.scenes = (clone.scenes || []).map((s) => ({
+    id: s.id,
+    chapter: s.chapter || '',
+    heading: s.heading || { int_ext: 'INT', location: '', time_of_day: '' },
+    present_characters: s.present_characters || [],
+    elements: (s.elements || []).map((e) => ({ ...e })),
+    mood: s.mood || '',
+    pacing: s.pacing || '',
+    shots: s.shots || [],
+    source: s.source || '',
+  }))
+  clone.report = clone.report || null
+  return clone
+}
+
+// ───────── 计算属性 ─────────
+const charMap = computed(() => {
+  const m = {}
+  for (const c of data.value?.characters || []) m[c.id] = c
+  return m
+})
+const filteredChars = computed(() => {
+  const q = charSearch.value.trim()
+  const list = data.value?.characters || []
+  if (!q) return list
+  return list.filter((c) => c.name.includes(q) || (c.aliases || []).join('').includes(q))
+})
+const report = computed(() => data.value?.report || {})
+const score = computed(() => report.value.score ?? 0)
+const scoreColor = computed(() => (score.value >= 80 ? 'var(--success)' : score.value >= 60 ? 'var(--accent)' : 'var(--danger)'))
+const gutter = computed(() => {
+  const n = yamlText.value.split('\n').length
+  let g = ''
+  for (let i = 1; i <= n; i++) g += i + '\n'
+  return g
+})
+
+function charName(id) {
+  return charMap.value[id]?.name || id
+}
+function sceneWarn(s) {
+  return !s.heading?.int_ext || !s.heading?.location || !s.heading?.time_of_day
+}
+function pct(x) {
+  return Math.round((x ?? 0) * 100)
+}
+
+// ───────── 视图切换 + 双向同步（js-yaml） ─────────
+function switchView(v) {
+  viewMode.value = v
+  if (v === 'yaml') syncYamlFromModel()
+}
+function syncYamlFromModel() {
+  try {
+    yamlText.value = jsyaml.dump(plainScreenplay(), { indent: 2, lineWidth: -1, noRefs: true, skipInvalid: true })
+  } catch (e) {
+    yamlText.value = '# 序列化失败：' + e.message
+  }
+}
+function plainScreenplay() {
+  return JSON.parse(JSON.stringify(data.value))
+}
+let yTimer = null
+function onYamlInput() {
+  clearTimeout(yTimer)
+  yTimer = setTimeout(() => {
+    try {
+      const obj = jsyaml.load(yamlText.value)
+      if (obj && typeof obj === 'object') {
+        if (obj.meta) data.value.meta = obj.meta
+        if (obj.characters) data.value.characters = obj.characters
+        if (Array.isArray(obj.scenes)) data.value.scenes = normalize({ scenes: obj.scenes }).scenes
+        if (obj.report) data.value.report = obj.report
+        setValid(true)
+      } else {
+        setValid(false)
+      }
+    } catch (e) {
+      setValid(false)
+    }
+  }, 380)
+}
+function setValid(ok) {
+  valid.value = ok
+  validText.value = ok ? '合法' : '解析失败'
+}
+
+// ───────── 卡片编辑 ─────────
+function addElement(scene, type) {
+  if (type === 'dialogue' || type === 'voiceover') {
+    scene.elements.push({ type, character: scene.present_characters[0] || '', line: '（新台词）' })
+  } else {
+    scene.elements.push({ type, text: type === 'transition' ? 'CUT TO:' : '（新' + TYPE_LABEL[type] + '）' })
+  }
+}
+function dupElement(scene, i) {
+  scene.elements.splice(i + 1, 0, JSON.parse(JSON.stringify(scene.elements[i])))
+}
+function delElement(scene, i) {
+  scene.elements.splice(i, 1)
+}
+function isSpoken(e) {
+  return e.type === 'dialogue' || e.type === 'voiceover'
+}
+
+// ───────── 联动 ─────────
+function selectScene(id) {
+  selScene.value = id
+  if (viewMode.value === 'cards') {
+    nextTick(() => {
+      const el = document.getElementById('card-' + id)
+      if (el) el.scrollIntoView({ block: 'start', behavior: 'smooth' })
+    })
+  }
+}
+function toggleChar(id) {
+  dimChar.value = dimChar.value === id ? '' : id
+  if (dimChar.value && viewMode.value !== 'cards') switchView('cards')
+}
+function locate(sceneId) {
+  if (!sceneId) return
+  if (viewMode.value !== 'cards') switchView('cards')
+  selectScene(sceneId)
+  toast('已定位到 ' + sceneId)
+}
+
+// ───────── 重校验 ─────────
+async function revalidate() {
+  try {
+    const yaml = viewMode.value === 'yaml' ? yamlText.value : jsyaml.dump(plainScreenplay(), { indent: 2, lineWidth: -1, noRefs: true, skipInvalid: true })
+    const r = await validateYaml(yaml)
+    setValid(r.valid)
+    if (r.report) data.value.report = r.report
+    toast(r.valid ? '已重校验 · Schema 合法' : '仍有 ' + r.error_count + ' 处错误')
+  } catch (e) {
+    toast('重校验失败：' + (e.response?.data?.message || e.message))
+  }
+}
+
+// ───────── Fountain 预览（客户端渲染，反映当前编辑） ─────────
+const fountainHtml = computed(() => buildFountain())
+function buildFountain() {
+  const sp = data.value
+  if (!sp) return ''
+  let html = `<div class="title-pg"><div class="t">${esc(sp.meta.title || '未命名剧本')}</div>`
+  const by = sp.meta.source_title || sp.meta.author
+  if (by) html += `<div class="by">${esc(by)}</div>`
+  html += '</div>'
+  for (const s of sp.scenes) {
+    const h = s.heading || {}
+    html += `<div class="sh">${h.int_ext === 'EXT' ? 'EXT.' : 'INT.'} ${esc(h.location || '?')} - ${esc(h.time_of_day || '?')}</div>`
+    for (const e of s.elements) {
+      if (e.type === 'action' || e.type === 'montage') html += `<div class="ac">${esc(e.text)}</div>`
+      else if (e.type === 'transition') html += `<div class="tr">${esc(e.text)}</div>`
+      else {
+        let nm = charName(e.character)
+        if (e.type === 'voiceover') nm += ' (V.O.)'
+        html += `<div class="cue">${esc(nm)}</div>` + (e.parenthetical ? `<div class="par">(${esc(e.parenthetical)})</div>` : '') + `<div class="dlg">${esc(e.line)}</div>`
+      }
+    }
+  }
+  return html
+}
+function fountainText() {
+  const sp = data.value
+  let t = `Title: ${sp.meta.title || ''}\n`
+  if (sp.meta.source_title) t += `Credit: 改编自\nAuthor: ${sp.meta.source_title}\n`
+  t += '\n'
+  for (const s of sp.scenes) {
+    const h = s.heading || {}
+    t += `${h.int_ext === 'EXT' ? 'EXT.' : 'INT.'} ${h.location || '?'} - ${h.time_of_day || '?'}\n\n`
+    for (const e of s.elements) {
+      if (e.type === 'action' || e.type === 'montage') t += e.text + '\n\n'
+      else if (e.type === 'transition') t += '> ' + e.text + '\n\n'
+      else {
+        let nm = charName(e.character)
+        if (e.type === 'voiceover') nm += ' (V.O.)'
+        t += nm.toUpperCase() + '\n' + (e.parenthetical ? '(' + e.parenthetical + ')\n' : '') + e.line + '\n\n'
+      }
+    }
+  }
+  return t
+}
+
+// ───────── 导出 ─────────
+function currentYaml() {
+  return jsyaml.dump(plainScreenplay(), { indent: 2, lineWidth: -1, noRefs: true, skipInvalid: true })
+}
+function download(name, content) {
+  const b = new Blob([content], { type: 'text/plain;charset=utf-8' })
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(b)
+  a.download = name
+  a.click()
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000)
+}
+function copy(t) {
+  try {
+    navigator.clipboard.writeText(t)
+  } catch (_) {
+    const ta = document.createElement('textarea')
+    ta.value = t
+    document.body.appendChild(ta)
+    ta.select()
+    try {
+      document.execCommand('copy')
+    } catch (e) {}
+    document.body.removeChild(ta)
+  }
+}
+function doExport(kind) {
+  exportOpen.value = false
+  const base = (data.value.meta.title || 'screenplay').replace(/[《》\s]/g, '') || 'screenplay'
+  if (kind === 'yaml') {
+    download(base + '.yaml', currentYaml())
+    toast('已导出 ' + base + '.yaml')
+  } else if (kind === 'fountain') {
+    download(base + '.fountain', fountainText())
+    toast('已导出 ' + base + '.fountain')
+  } else if (kind === 'copy') {
+    copy(currentYaml())
+    toast('YAML 已复制到剪贴板')
+  } else if (kind === 'pdf') {
+    drawerOpen.value = true
+    toast('PDF：在预览中使用浏览器「打印 / 另存为 PDF」')
+  }
+}
+
+// ───────── 杂项 ─────────
+let toastTimer = null
+const toastMsg = ref('')
+const toastShow = ref(false)
+function toast(m) {
+  toastMsg.value = m
+  toastShow.value = true
+  clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => (toastShow.value = false), 2200)
+}
+function esc(s) {
+  return (s == null ? '' : String(s)).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+function onDocClick(e) {
+  if (!e.target.closest('.menu')) {
+    exportOpen.value = false
+    modelOpen.value = false
+  }
+}
+</script>
+
+<template>
+  <div class="wb" v-if="data">
+    <!-- TOP BAR -->
+    <header class="top">
+      <div class="brand"><span class="logo">◧</span>ScriptForge</div>
+      <div class="proj"><b>{{ data.meta.title }}</b> <span class="v">v1</span></div>
+      <div class="spacer"></div>
+
+      <div class="menu">
+        <button class="tb" @click.stop="modelOpen = !modelOpen"><span class="dot"></span>模型 <b>{{ data.meta.generated_by || 'stub' }}</b></button>
+        <div class="dd model-pop" :class="{ open: modelOpen }">
+          <h4>通用模型适配器</h4>
+          <div class="field"><label>当前模型</label><input :value="data.meta.generated_by" readonly /></div>
+          <p class="pop-note">换 provider/base-url/model 三项配置即可切换任意模型（OpenAI/DeepSeek/Kimi/GLM/通义/本地/聚合网关），不绑定厂商。</p>
+        </div>
+      </div>
+
+      <button class="tb" @click="revalidate" title="重校验">⟳ <span class="lbl">重校验</span></button>
+      <button class="tb" :class="{ ok: valid }" :style="!valid ? 'color:var(--danger)' : ''">{{ valid ? '✓' : '⚠' }} {{ validText }}</button>
+      <button class="tb" @click="drawerOpen = true"><span class="lbl">👁 预览</span></button>
+      <div class="menu">
+        <button class="tb primary" @click.stop="exportOpen = !exportOpen">⤓ 导出 ▾</button>
+        <div class="dd" :class="{ open: exportOpen }">
+          <button class="it" @click="doExport('yaml')">YAML（.yaml）<small>结构化、可再编辑</small></button>
+          <button class="it" @click="doExport('fountain')">剧本文本（.fountain）<small>行业标准排版</small></button>
+          <button class="it" @click="doExport('pdf')">PDF（排版剧本）<small>打印 / 分享</small></button>
+          <div class="sep"></div>
+          <button class="it" @click="doExport('copy')">复制 YAML 到剪贴板</button>
+        </div>
+      </div>
+      <div class="ring" title="改编质量分">
+        <svg width="38" height="38">
+          <circle cx="19" cy="19" r="16" fill="none" stroke="#232c37" stroke-width="3.5" />
+          <circle cx="19" cy="19" r="16" fill="none" :stroke="scoreColor" stroke-width="3.5" stroke-linecap="round"
+            :stroke-dasharray="100.5" :stroke-dashoffset="100.5 - (100.5 * score) / 100" transform="rotate(-90 19 19)" />
+        </svg>
+        <span class="num" :style="{ color: scoreColor }">{{ score }}</span>
+      </div>
+    </header>
+
+    <div class="work">
+      <!-- LEFT: outline -->
+      <aside class="pane left">
+        <div class="pane-h">场景大纲 <span class="c">{{ data.scenes.length }}</span></div>
+        <div class="outline">
+          <button v-for="s in data.scenes" :key="s.id" class="oi" :class="{ sel: s.id === selScene }" @click="selectScene(s.id)">
+            <div class="sid">{{ s.id }}<span v-if="sceneWarn(s)" class="warn">⚠</span></div>
+            <div class="sslug">{{ s.heading.location || '未命名' }} · {{ s.heading.time_of_day || '—' }}</div>
+            <div class="smeta">{{ s.heading.int_ext === 'INT' ? '内景' : '外景' }} · 在场 {{ s.present_characters.length }} 人 · {{ s.elements.length }} 元素</div>
+          </button>
+        </div>
+      </aside>
+
+      <!-- CENTER -->
+      <main class="pane center">
+        <div class="ctool">
+          <div class="seg">
+            <button :class="{ on: viewMode === 'cards' }" @click="switchView('cards')">▣ 场景卡片</button>
+            <button :class="{ on: viewMode === 'yaml' }" @click="switchView('yaml')">﹤﹥ YAML</button>
+          </div>
+          <div class="hint">改任一侧 <span class="k">卡片</span> ⇆ <span class="k">YAML</span> 即时双向同步</div>
+        </div>
+
+        <!-- CARDS -->
+        <div class="cards" v-show="viewMode === 'cards'">
+          <div v-for="s in data.scenes" :key="s.id" class="scard" :class="{ warn: sceneWarn(s), sel: s.id === selScene }" :id="'card-' + s.id">
+            <div class="sc-head">
+              <span class="sidtag">{{ s.id }}</span>
+              <div class="slug">
+                <select class="selie" v-model="s.heading.int_ext"><option>INT</option><option>EXT</option></select>
+                <input class="seg-loc" :class="{ miss: !s.heading.location }" v-model="s.heading.location" placeholder="地点?" />·
+                <input class="seg-loc" :class="{ miss: !s.heading.time_of_day }" v-model="s.heading.time_of_day" placeholder="时间?" />
+              </div>
+              <span class="ch">{{ s.chapter }}</span>
+            </div>
+            <div class="present">
+              <span class="lab">在场</span>
+              <span v-for="cid in s.present_characters" :key="cid" class="cchip"><span class="av">{{ (charName(cid) || '?').charAt(0) }}</span>{{ charName(cid) }}</span>
+            </div>
+            <div class="elems">
+              <div v-for="(e, i) in s.elements" :key="i" class="erow" :class="{ dim: dimChar && e.character !== dimChar, hl: dimChar && e.character === dimChar }">
+                <div class="barc" :style="{ background: 'var(--' + TYPE_VAR[e.type] + ')' }"></div>
+                <div class="ebody">
+                  <div class="etype" :style="{ color: 'var(--' + TYPE_VAR[e.type] + ')' }">
+                    {{ TYPE_LABEL[e.type] }}
+                    <span v-if="isSpoken(e)" class="who">{{ charName(e.character) }}</span>
+                    <span v-if="isSpoken(e) && e.parenthetical" class="paren">（{{ e.parenthetical }}）</span>
+                  </div>
+                  <input v-if="isSpoken(e)" class="etext" v-model="e.line" />
+                  <textarea v-else class="etext ta" v-model="e.text" rows="1"></textarea>
+                </div>
+                <div class="eact">
+                  <button title="复制" @click="dupElement(s, i)">⧉</button>
+                  <button title="删除" @click="delElement(s, i)">🗑</button>
+                </div>
+              </div>
+            </div>
+            <div class="addel">
+              <span class="lab">+ 添加元素</span>
+              <button v-for="t in ['action', 'dialogue', 'voiceover', 'transition', 'montage']" :key="t" :style="{ color: 'var(--' + TYPE_VAR[t] + ')' }" @click="addElement(s, t)">{{ TYPE_LABEL[t] }}</button>
+            </div>
+            <div class="annot">
+              <span class="grp">🎬 分镜</span>
+              <template v-if="s.shots.length"><span v-for="(sh, i) in s.shots" :key="i" class="atag shot">{{ sh }}</span></template>
+              <span v-else class="atag" style="color:var(--muted)">—</span>
+              <span class="grp">情绪</span><span class="atag mood">{{ s.mood || '—' }}</span>
+              <span class="grp">节奏</span><span class="atag pace">{{ s.pacing || '—' }}</span>
+            </div>
+            <details class="trace" v-if="s.source"><summary>📖 原文溯源</summary><div class="src">“{{ s.source }}”</div></details>
+          </div>
+        </div>
+
+        <!-- YAML -->
+        <div class="yaml-wrap" v-show="viewMode === 'yaml'">
+          <div class="yaml-bar">
+            <span class="vstat" :class="valid ? 'ok' : 'bad'">{{ valid ? '✓ Schema 合法' : '⚠ 解析失败 · 检查缩进/格式' }}</span>
+            <span class="sp"></span>
+            <button @click="revalidate">重校验</button>
+            <button @click="copy(yamlText); toast('YAML 已复制到剪贴板')">复制</button>
+          </div>
+          <div class="yamled">
+            <pre class="gutter">{{ gutter }}</pre>
+            <textarea class="yta" spellcheck="false" v-model="yamlText" @input="onYamlInput"></textarea>
+          </div>
+        </div>
+      </main>
+
+      <!-- RIGHT -->
+      <aside class="pane right">
+        <div class="tabs">
+          <button :class="{ on: activeTab === 'char' }" @click="activeTab = 'char'">角色圣经</button>
+          <button :class="{ on: activeTab === 'qual' }" @click="activeTab = 'qual'">质量报告</button>
+        </div>
+
+        <div class="tabpane" v-show="activeTab === 'char'">
+          <input class="search" v-model="charSearch" placeholder="🔎 搜索角色…" />
+          <div v-for="c in filteredChars" :key="c.id" class="ccard" :class="{ act: dimChar === c.id }" @click="toggleChar(c.id)">
+            <div class="ch">
+              <span class="av">{{ c.name.charAt(0) }}</span><span class="nm">{{ c.name }}</span>
+              <span class="role">{{ c.role }}</span>
+            </div>
+            <div v-if="c.aliases && c.aliases.length" class="alias"><span v-for="a in c.aliases" :key="a">{{ a }}</span></div>
+            <div class="meta" style="margin-top:8px">
+              <template v-if="c.tone"><span class="k">口吻：</span>{{ c.tone }}<br /></template>
+              <template v-if="c.relations && c.relations.length"><span class="k">关系：</span>{{ c.relations.map((r) => r.target + '=' + r.relation).join(' · ') }}<br /></template>
+              <template v-if="c.first_appearance"><span class="k">首次登场：</span>{{ c.first_appearance }}</template>
+            </div>
+          </div>
+        </div>
+
+        <div class="tabpane" v-show="activeTab === 'qual'">
+          <div class="gauge">
+            <div class="gw">
+              <svg width="118" height="118">
+                <circle cx="59" cy="59" r="50" fill="none" stroke="#232c37" stroke-width="8" />
+                <circle cx="59" cy="59" r="50" fill="none" :stroke="scoreColor" stroke-width="8" stroke-linecap="round"
+                  :stroke-dasharray="314" :stroke-dashoffset="314 - (314 * score) / 100" transform="rotate(-90 59 59)" />
+              </svg>
+              <div class="gnum"><b :style="{ color: scoreColor }">{{ score }}</b><small>/ 100</small></div>
+            </div>
+            <div class="glabel">综合评分 · <b style="color:var(--text)">{{ report.grade || '—' }}</b></div>
+          </div>
+          <div class="qpass" v-if="report.schema_valid">✓ Schema 校验通过 · 0 错误</div>
+          <div class="qpass bad" v-else>⚠ Schema 有 {{ report.schema_error_count }} 处错误</div>
+          <div class="qrow"><div class="qt">对白说话人覆盖 <span class="qv">{{ pct(report.dialogue_attribution_rate) }}%</span></div><div class="qbar good"><i :style="{ width: pct(report.dialogue_attribution_rate) + '%' }"></i></div></div>
+          <div class="qrow"><div class="qt">角色一致性 <span class="qv">{{ pct(report.character_consistency_rate) }}%</span></div><div class="qbar good"><i :style="{ width: pct(report.character_consistency_rate) + '%' }"></i></div></div>
+          <div class="qrow"><div class="qt">场景头完整 <span class="qv">{{ pct(report.scene_heading_completeness_rate) }}%</span></div><div class="qbar"><i :style="{ width: pct(report.scene_heading_completeness_rate) + '%' }"></i></div></div>
+          <div class="qrow"><div class="qt">演 / 说比 <span class="qv">{{ report.show_vs_tell_ratio }}</span></div><div class="qbar good"><i :style="{ width: Math.min(100, (report.show_vs_tell_ratio || 0) * 100) + '%' }"></i></div></div>
+          <div class="qstat"><span>场景 {{ report.scene_count }}</span><span>角色 {{ report.character_count }}</span><span>平均 {{ report.avg_elements_per_scene }} 元素/场</span></div>
+          <div class="qtodo" v-if="report.issues && report.issues.length">
+            <h5>待改进</h5>
+            <div v-for="(it, i) in report.issues" :key="i" class="ti">
+              <span class="w">⚠</span>{{ it.message }}
+              <button v-if="it.scene_id" class="loc" @click="locate(it.scene_id)">定位</button>
+            </div>
+          </div>
+        </div>
+      </aside>
+    </div>
+
+    <!-- preview drawer -->
+    <div class="scrim" :class="{ show: drawerOpen }" @click="drawerOpen = false"></div>
+    <aside class="drawer" :class="{ show: drawerOpen }">
+      <div class="dh">
+        <h3>剧本预览 · Fountain</h3>
+        <button @click="copy(fountainText()); toast('剧本文本已复制')">⧉ 复制</button>
+        <button @click="drawerOpen = false">✕ 关闭</button>
+      </div>
+      <div class="script-page"><div class="fountain" v-html="fountainHtml"></div></div>
+    </aside>
+
+    <div class="toast" :class="{ show: toastShow }">✓ {{ toastMsg }}</div>
+  </div>
+</template>
+
+<style scoped>
+.wb { height: 100%; display: flex; flex-direction: column; overflow: hidden; }
+button { font: inherit; cursor: pointer; }
+
+.top { display: flex; align-items: center; gap: 12px; padding: 11px 18px; border-bottom: 1px solid var(--border); background: var(--surface); flex: none; z-index: 30; }
+.brand { display: flex; align-items: center; gap: 9px; font-weight: 700; font-size: 15px; }
+.logo { width: 24px; height: 24px; border-radius: 6px; background: linear-gradient(135deg, var(--accent), #b07d1e); display: grid; place-items: center; color: #0e1116; font-weight: 800; font-size: 14px; }
+.proj { color: var(--text-2); font-weight: 500; font-size: 13px; border-left: 1px solid var(--border); padding-left: 11px; white-space: nowrap; }
+.proj b { color: var(--text); }
+.proj .v { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+.top .spacer { flex: 1; }
+.tb { display: inline-flex; align-items: center; gap: 7px; background: var(--raised); border: 1px solid var(--border); color: var(--text-2); padding: 7px 12px; border-radius: 6px; font-size: 13px; white-space: nowrap; }
+.tb:hover { border-color: var(--border-strong); color: var(--text); }
+.tb b { color: var(--text); font-weight: 600; }
+.tb .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 7px var(--accent); }
+.tb.ok { color: var(--success); border-color: rgba(63, 185, 80, 0.32); }
+.tb.primary { background: var(--accent); color: #0e1116; border-color: var(--accent); font-weight: 600; }
+.ring { width: 38px; height: 38px; position: relative; flex: none; }
+.ring .num { position: absolute; inset: 0; display: grid; place-items: center; font-family: var(--mono); font-size: 13px; font-weight: 600; }
+.menu { position: relative; }
+.dd { position: absolute; right: 0; top: 44px; background: var(--raised); border: 1px solid var(--border-strong); border-radius: 10px; padding: 7px; min-width: 240px; box-shadow: 0 18px 50px rgba(0, 0, 0, 0.55); z-index: 60; display: none; }
+.dd.open { display: block; }
+.dd .it { display: block; width: 100%; text-align: left; padding: 9px 11px; border-radius: 7px; color: var(--text-2); font-size: 13px; background: none; border: none; }
+.dd .it:hover { background: var(--surface); color: var(--text); }
+.dd .it small { display: block; color: var(--muted); font-size: 11px; margin-top: 1px; }
+.dd .sep { height: 1px; background: var(--border); margin: 6px 4px; }
+.dd.model-pop { padding: 15px; min-width: 300px; }
+.dd.model-pop h4 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.12em; color: var(--muted); margin-bottom: 11px; }
+.dd .field label { display: block; font-size: 11px; color: var(--text-2); margin-bottom: 4px; }
+.dd .field input { width: 100%; background: var(--inset); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 7px 9px; font: inherit; font-size: 12.5px; }
+.pop-note { font-size: 11px; color: var(--muted); margin-top: 8px; line-height: 1.5; }
+
+.work { flex: 1; display: grid; grid-template-columns: 248px 1fr 332px; min-height: 0; }
+.pane { min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
+.left { border-right: 1px solid var(--border); background: var(--surface); }
+.center { background: var(--bg); }
+.right { border-left: 1px solid var(--border); background: var(--surface); }
+.pane-h { padding: 13px 16px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-2); font-weight: 600; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px; position: sticky; top: 0; background: var(--surface); z-index: 5; }
+.pane-h .c { font-family: var(--mono); color: var(--muted); margin-left: auto; font-size: 11px; }
+
+.outline { padding: 8px; }
+.oi { display: block; width: 100%; text-align: left; background: none; border: 1px solid transparent; border-radius: 8px; padding: 10px 11px; margin-bottom: 3px; color: var(--text-2); }
+.oi:hover { background: var(--raised); }
+.oi.sel { background: var(--accent-soft); border-color: rgba(232, 179, 73, 0.3); }
+.oi .sid { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-bottom: 3px; display: flex; align-items: center; gap: 6px; }
+.oi.sel .sid { color: var(--accent); }
+.oi .sslug { font-size: 13.5px; color: var(--text); font-weight: 500; }
+.oi .smeta { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.oi .warn { color: var(--warning); margin-left: auto; }
+
+.ctool { position: sticky; top: 0; z-index: 6; display: flex; align-items: center; gap: 12px; padding: 11px 18px; background: var(--bg); border-bottom: 1px solid var(--border); }
+.seg { display: inline-flex; background: var(--raised); border: 1px solid var(--border); border-radius: 8px; padding: 3px; }
+.seg button { background: none; border: none; color: var(--text-2); padding: 6px 14px; border-radius: 6px; font-size: 13px; }
+.seg button.on { background: var(--accent); color: #0e1116; font-weight: 600; }
+.ctool .hint { color: var(--muted); font-size: 12px; margin-left: auto; }
+.ctool .hint .k { font-family: var(--mono); background: var(--raised); border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px; font-size: 11px; color: var(--text-2); }
+
+.cards { padding: 18px; display: flex; flex-direction: column; gap: 18px; }
+.scard { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; scroll-margin-top: 70px; box-shadow: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 8px 24px rgba(0, 0, 0, 0.32); }
+.scard.sel { border-color: var(--border-strong); }
+.scard.warn { border-color: rgba(210, 153, 34, 0.4); }
+.sc-head { padding: 14px 16px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.slug { display: flex; align-items: center; gap: 7px; font-family: var(--script); font-weight: 700; font-size: 14px; text-transform: uppercase; color: var(--text); }
+.slug .selie { background: var(--inset); border: 1px solid var(--border); color: var(--text); border-radius: 5px; padding: 3px 7px; font-family: var(--ui); font-size: 12px; }
+.slug .seg-loc { background: transparent; border: none; border-bottom: 1px dashed var(--border-strong); color: var(--text); padding: 2px 4px; outline: none; font: inherit; font-size: 13px; width: 88px; }
+.slug .seg-loc:focus { border-bottom-color: var(--accent); background: var(--accent-soft); }
+.slug .miss { color: var(--warning); border-color: var(--warning); }
+.sc-head .sidtag { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+.sc-head .ch { font-size: 11px; color: var(--muted); margin-left: auto; font-family: var(--mono); }
+.present { display: flex; align-items: center; gap: 7px; padding: 10px 16px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+.present .lab { font-size: 11px; color: var(--muted); }
+.cchip { display: inline-flex; align-items: center; gap: 6px; background: var(--raised); border: 1px solid var(--border); border-radius: 999px; padding: 3px 10px 3px 4px; font-size: 12px; color: var(--text); }
+.cchip .av { width: 18px; height: 18px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; font-size: 10px; font-weight: 700; }
+
+.elems { padding: 6px 0; }
+.erow { display: flex; position: relative; }
+.erow .barc { width: 3px; flex: none; border-radius: 3px; margin: 10px 0 10px 16px; }
+.erow .ebody { flex: 1; padding: 9px 14px 9px 12px; min-width: 0; }
+.erow:hover { background: var(--raised); }
+.erow .etype { font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; font-family: var(--mono); margin-bottom: 3px; display: flex; align-items: center; gap: 8px; }
+.erow .who { font-weight: 600; color: var(--text); }
+.erow .paren { color: var(--el-paren); font-style: italic; font-size: 12px; }
+.erow .etext { display: block; width: 100%; color: var(--text); font: inherit; font-size: 14px; background: transparent; border: 1px solid transparent; border-radius: 4px; padding: 1px 3px; resize: none; }
+.erow .etext:focus { background: var(--inset); border-color: var(--accent); outline: none; }
+.erow .etext.ta { line-height: 1.5; min-height: 24px; field-sizing: content; }
+.erow.dim { opacity: 0.32; }
+.erow.hl { background: rgba(45, 212, 191, 0.07); }
+.eact { display: flex; gap: 2px; opacity: 0; align-items: flex-start; padding: 9px 12px 0 0; }
+.erow:hover .eact { opacity: 1; }
+.eact button { width: 26px; height: 26px; border-radius: 6px; background: none; border: none; color: var(--muted); }
+.eact button:hover { background: var(--inset); color: var(--text); }
+.addel { display: flex; gap: 7px; flex-wrap: wrap; padding: 8px 16px 12px; align-items: center; }
+.addel .lab { font-size: 11px; color: var(--muted); }
+.addel button { background: var(--raised); border: 1px solid var(--border); border-radius: 6px; padding: 4px 11px; font-size: 12px; }
+.addel button:hover { border-color: var(--accent); }
+
+.annot { border-top: 1px dashed var(--border); padding: 11px 16px; display: flex; align-items: center; gap: 9px; flex-wrap: wrap; font-size: 12px; }
+.annot .grp { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+.atag { background: var(--inset); border: 1px solid var(--border); border-radius: 5px; padding: 3px 9px; color: var(--text-2); font-size: 12px; }
+.atag.shot { color: var(--accent); border-color: rgba(232, 179, 73, 0.3); }
+.atag.mood { color: #f3b4d6; border-color: rgba(244, 114, 182, 0.3); }
+.atag.pace { color: #9ecbff; border-color: rgba(88, 166, 255, 0.3); }
+.trace { border-top: 1px dashed var(--border); padding: 0 16px; }
+.trace summary { padding: 10px 0; font-size: 12px; color: var(--text-2); cursor: pointer; }
+.trace .src { padding: 0 0 12px 13px; font-size: 13px; color: var(--text-2); font-style: italic; border-left: 2px solid var(--accent); margin: 0 0 10px 5px; line-height: 1.6; }
+
+.yaml-wrap { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.yaml-bar { display: flex; align-items: center; gap: 10px; padding: 9px 16px; border-bottom: 1px solid var(--border); background: var(--bg); font-size: 12px; color: var(--muted); }
+.yaml-bar .vstat.ok { color: var(--success); }
+.yaml-bar .vstat.bad { color: var(--danger); }
+.yaml-bar .sp { flex: 1; }
+.yaml-bar button { background: var(--raised); border: 1px solid var(--border); border-radius: 6px; padding: 5px 10px; font-size: 12px; color: var(--text-2); }
+.yaml-bar button:hover { border-color: var(--accent); color: var(--accent); }
+.yamled { flex: 1; display: flex; min-height: 0; }
+.gutter { font-family: var(--mono); font-size: 13px; line-height: 1.6; color: var(--muted); text-align: right; padding: 14px 8px 14px 14px; background: var(--inset); user-select: none; white-space: pre; margin: 0; }
+.yta { flex: 1; background: var(--inset); color: var(--text); border: none; resize: none; font-family: var(--mono); font-size: 13px; line-height: 1.6; padding: 14px 16px 14px 10px; outline: none; white-space: pre; tab-size: 2; }
+
+.tabs { display: flex; gap: 4px; padding: 10px 12px 0; position: sticky; top: 0; background: var(--surface); z-index: 5; border-bottom: 1px solid var(--border); }
+.tabs button { flex: 1; background: none; border: none; border-bottom: 2px solid transparent; color: var(--text-2); padding: 9px 0; font-size: 13px; font-weight: 500; }
+.tabs button.on { color: var(--accent); border-bottom-color: var(--accent); }
+.tabpane { padding: 12px; }
+.search { width: 100%; background: var(--inset); border: 1px solid var(--border); color: var(--text); border-radius: 7px; padding: 8px 11px; font: inherit; font-size: 13px; margin-bottom: 11px; }
+.ccard { background: var(--raised); border: 1px solid var(--border); border-radius: 10px; padding: 13px; margin-bottom: 10px; cursor: pointer; }
+.ccard:hover { border-color: var(--border-strong); }
+.ccard.act { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.ccard .ch { display: flex; align-items: center; gap: 10px; margin-bottom: 9px; }
+.ccard .av { width: 34px; height: 34px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; font-weight: 700; font-size: 15px; border: 1px solid rgba(232, 179, 73, 0.3); }
+.ccard .nm { font-weight: 700; font-size: 15px; }
+.ccard .role { font-size: 11px; color: var(--accent); background: var(--accent-soft); border-radius: 999px; padding: 2px 9px; margin-left: auto; }
+.ccard .meta { font-size: 12px; color: var(--text-2); line-height: 1.7; }
+.ccard .meta .k { color: var(--muted); }
+.ccard .alias { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 7px; }
+.ccard .alias span { font-size: 11px; background: var(--inset); border: 1px solid var(--border); border-radius: 5px; padding: 2px 7px; color: var(--text-2); }
+
+.gauge { display: flex; flex-direction: column; align-items: center; padding: 8px 0 16px; }
+.gauge .gw { position: relative; width: 118px; height: 118px; }
+.gauge .gw .gnum { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+.gauge .gw .gnum b { font-size: 34px; font-family: var(--mono); font-weight: 600; }
+.gauge .gw .gnum small { font-size: 11px; color: var(--muted); }
+.gauge .glabel { margin-top: 8px; font-size: 13px; color: var(--text-2); }
+.qrow { margin-bottom: 13px; }
+.qrow .qt { display: flex; align-items: center; font-size: 13px; margin-bottom: 5px; }
+.qrow .qt .qv { margin-left: auto; font-family: var(--mono); font-size: 12px; color: var(--text-2); }
+.qbar { height: 6px; background: var(--inset); border-radius: 999px; overflow: hidden; }
+.qbar i { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, #b07d1e, var(--accent)); }
+.qbar.good i { background: var(--success); }
+.qpass { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--success); background: rgba(63, 185, 80, 0.08); border: 1px solid rgba(63, 185, 80, 0.25); border-radius: 8px; padding: 9px 12px; margin-bottom: 14px; }
+.qpass.bad { color: var(--danger); background: rgba(248, 81, 73, 0.08); border-color: rgba(248, 81, 73, 0.25); }
+.qstat { display: flex; gap: 12px; font-size: 12px; color: var(--muted); font-family: var(--mono); margin: 6px 0 16px; flex-wrap: wrap; }
+.qtodo { border-top: 1px solid var(--border); padding-top: 13px; }
+.qtodo h5 { font-size: 12px; color: var(--text-2); margin-bottom: 9px; text-transform: uppercase; letter-spacing: 0.08em; }
+.qtodo .ti { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-2); padding: 7px 0; }
+.qtodo .ti .w { color: var(--warning); flex: none; }
+.qtodo .ti .loc { margin-left: auto; background: var(--raised); border: 1px solid var(--border); color: var(--accent); border-radius: 6px; padding: 3px 10px; font-size: 11px; }
+
+.scrim { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.6); opacity: 0; pointer-events: none; transition: 0.2s; z-index: 80; }
+.scrim.show { opacity: 1; pointer-events: auto; }
+.drawer { position: fixed; top: 0; right: 0; height: 100%; width: min(640px, 100%); background: var(--surface); border-left: 1px solid var(--border-strong); transform: translateX(100%); transition: 0.28s cubic-bezier(0.4, 0, 0.2, 1); z-index: 90; display: flex; flex-direction: column; }
+.drawer.show { transform: none; }
+.drawer .dh { display: flex; align-items: center; gap: 12px; padding: 14px 18px; border-bottom: 1px solid var(--border); }
+.drawer .dh h3 { font-size: 15px; font-weight: 600; flex: 1; }
+.drawer .dh button { background: var(--raised); border: 1px solid var(--border); border-radius: 6px; padding: 6px 11px; font-size: 12px; color: var(--text-2); }
+.script-page { flex: 1; overflow-y: auto; padding: 48px 64px; background: #11151b; }
+.fountain { max-width: 540px; margin: 0 auto; font-family: var(--script); font-size: 15px; line-height: 1.7; color: #dfe6ee; }
+.fountain :deep(.title-pg) { text-align: center; margin-bottom: 48px; }
+.fountain :deep(.title-pg .t) { font-size: 20px; font-weight: 700; letter-spacing: 0.05em; }
+.fountain :deep(.title-pg .by) { color: var(--text-2); margin-top: 8px; font-size: 14px; }
+.fountain :deep(.sh) { text-transform: uppercase; font-weight: 700; margin: 24px 0 10px; }
+.fountain :deep(.ac) { margin: 0 0 12px; }
+.fountain :deep(.cue) { text-align: center; text-transform: uppercase; margin: 14px 0 0; font-weight: 700; }
+.fountain :deep(.par) { text-align: center; color: var(--text-2); font-size: 13px; }
+.fountain :deep(.dlg) { max-width: 340px; margin: 2px auto 12px; text-align: center; }
+.fountain :deep(.tr) { text-align: right; text-transform: uppercase; font-weight: 700; margin: 14px 0; color: var(--accent); }
+
+.toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(20px); background: var(--raised); border: 1px solid var(--border-strong); color: var(--text); padding: 11px 18px; border-radius: 10px; font-size: 13px; box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5); opacity: 0; pointer-events: none; transition: 0.25s; z-index: 120; }
+.toast.show { opacity: 1; transform: translateX(-50%); }
+
+@media (max-width: 1200px) { .work { grid-template-columns: 248px 1fr; } .right { display: none; } }
+</style>
