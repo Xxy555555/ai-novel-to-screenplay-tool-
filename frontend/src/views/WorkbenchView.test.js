@@ -84,6 +84,37 @@ describe('WorkbenchView —— AI 多轮对话精修（Feature 1b）', () => {
     expect(ae.text()).toContain('强化主角动机')
   })
 
+  it('评测建议「采纳」→ 以该建议为指令精修并出现 diff（Feature: adopt）', async () => {
+    const { w, store } = await mountWorkbench()
+    store.sessionId = 'sess-1'
+    mockEvaluate.mockResolvedValue({
+      score: 70,
+      assessment: '可加强',
+      suggestions: ['强化主角动机', '精简冗长旁白'],
+      ai_evaluated: true,
+    })
+    mockChatRefine.mockResolvedValue({
+      reply: '已强化主角动机。',
+      changed: true,
+      valid: true,
+      screenplay: sampleScreenplay('紧张'),
+    })
+    await w.findAll('.tabs button')[1].trigger('click') // 质量页
+    await w.find('.ae-run').trigger('click')
+    await flushPromises()
+
+    const adoptBtns = w.findAll('.s-adopt')
+    expect(adoptBtns.length).toBe(2) // 每条建议一个采纳按钮
+    await adoptBtns[0].trigger('click')
+    await flushPromises()
+
+    // 以该建议为指令调用精修
+    expect(mockChatRefine).toHaveBeenCalled()
+    expect(mockChatRefine.mock.calls[0][0].message).toContain('强化主角动机')
+    // 走 diff 确认流程（不自动应用）
+    expect(w.find('.diffpane').exists()).toBe(true)
+  })
+
   it('多线程历史：新建对话与原线程互不干扰、可切回（Feature 3）', async () => {
     const { w } = await mountWorkbench()
     await w.findAll('.tabs button')[2].trigger('click') // 切到对话页
