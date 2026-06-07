@@ -58,4 +58,19 @@ class PromptTemplatesTest {
         assertTrue(user.contains("把 S2 改得更紧张"), "应内联用户指令");
         assertTrue(user.contains("\"title\":\"x\""), "应内联剧本 JSON");
     }
+
+    @Test
+    void evaluatePromptsIsolateContextAndCarryMarkers() {
+        String sys = PromptTemplates.evaluateSystem("zh");
+        assertTrue(sys.contains("score") && sys.contains("assessment") && sys.contains("suggestions"),
+                "系统提示应声明评测信封字段");
+        assertTrue(sys.contains("只依据") || sys.contains("不要使用外部"), "中文提示应强调隔离上下文");
+        assertTrue(PromptTemplates.evaluateSystem("en").contains("SOLELY"), "英文提示应强调仅依据所给文本");
+
+        String user = PromptTemplates.evaluateUser("{\"meta\":{\"title\":\"x\"}}", "原著正文……");
+        assertTrue(user.contains(PromptTemplates.EVAL_NOVEL_MARKER), "应含原著标记");
+        assertTrue(user.contains(PromptTemplates.EVAL_SCREENPLAY_MARKER), "应含剧本标记");
+        assertTrue(user.contains("原著正文……"), "应内联原著");
+        assertTrue(user.contains("\"title\":\"x\""), "应内联剧本 JSON");
+    }
 }

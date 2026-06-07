@@ -116,6 +116,12 @@ public class GenerationService {
         return results.get(id);
     }
 
+    /** 取该会话的原著小说原文（供 AI 质量评测对照；会话不存在时返回 {@code null}）。 */
+    public String getOriginalText(String id) {
+        InputSpec spec = id == null ? null : pending.get(id);
+        return spec == null ? null : spec.text();
+    }
+
     private void sendQuietly(SseEmitter emitter, String event, Object data) {
         try {
             emitter.send(SseEmitter.event().name(event).data(mapper.writeValueAsString(data),

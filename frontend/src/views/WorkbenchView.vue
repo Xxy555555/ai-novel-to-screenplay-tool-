@@ -4,7 +4,7 @@ import { useRouter } from 'vue-router'
 import jsyaml from 'js-yaml'
 import { useAppStore } from '@/stores/app'
 import { useChatStore } from '@/stores/chat'
-import { fetchScreenplay, validateYaml, chatRefine } from '@/api/http'
+import { fetchScreenplay, validateYaml, chatRefine, evaluateQuality } from '@/api/http'
 
 const router = useRouter()
 const store = useAppStore()
@@ -36,6 +36,10 @@ const chatInput = ref('')
 const chatBusy = ref(false)
 const chatScroll = ref(null)
 const threadsOpen = ref(false) // 历史线程列表展开
+
+// ───────── AI 质量评测 ─────────
+const evalBusy = ref(false)
+const evalResult = ref(null) // { score, assessment, suggestions, ai_evaluated }
 
 // ───────── 载入 ─────────
 onMounted(async () => {
@@ -360,6 +364,34 @@ async function sendChat() {
     chatScrollToBottom()
   }
 }
+// ───────── AI 质量评测：剧本 + 原著隔离评判 ─────────
+const aeScoreColor = computed(() => {
+  const s = evalResult.value?.score ?? 0
+  return s >= 80 ? 'var(--success)' : s >= 60 ? 'var(--accent)' : 'var(--danger)'
+})
+async function runEval() {
+  if (evalBusy.value) return
+  if (!store.sessionId) {
+    toast('当前会话缺少原著文本，请重新生成后再评测')
+    return
+  }
+  evalBusy.value = true
+  try {
+    const r = await evaluateQuality({
+      sessionId: store.sessionId,
+      screenplay: plainScreenplay(),
+      language: store.source?.language || 'auto',
+    })
+    evalResult.value = r
+    toast('AI 评测完成 · ' + (r.ai_evaluated ? 'AI 评判' : '离线规则评估'))
+  } catch (e) {
+    const m = e.response?.data?.message || e.message || '评测失败'
+    toast('评测失败：' + m)
+  } finally {
+    evalBusy.value = false
+  }
+}
+
 // 用 AI 返回的剧本替换工作区，并保持选中场景与视图同步。
 function applyRefined(sp) {
   const keep = selScene.value
@@ -724,6 +756,29 @@ function onDocClick(e) {
               <button v-if="it.scene_id" class="loc" @click="locate(it.scene_id)">定位</button>
             </div>
           </div>
+
+          <!-- AI 改编评测：剧本 + 原著隔离评判 -->
+          <div class="ai-eval">
+            <div class="ae-head">
+              <h5>AI 改编评测</h5>
+              <button class="ae-run" :disabled="evalBusy" @click="runEval">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l1.9 5.8L20 9l-5 3.6L16.8 19 12 15.4 7.2 19 9 12.6 4 9l6.1-.2z" /></svg>
+                {{ evalBusy ? '评测中…' : (evalResult ? '重新评测' : '开始评测') }}
+              </button>
+            </div>
+            <p class="ae-tip" v-if="!evalResult && !evalBusy">把当前剧本与原著一起交给 AI（隔离其它上下文），分析改编质量并给出修改建议。</p>
+            <div class="ae-result" v-if="evalResult">
+              <div class="ae-top">
+                <div class="ae-score" :style="{ color: aeScoreColor }">{{ evalResult.score }}<small>/100</small></div>
+                <span class="ae-badge" :class="{ rule: !evalResult.ai_evaluated }">{{ evalResult.ai_evaluated ? 'AI 评判' : '离线规则评估' }}</span>
+              </div>
+              <p class="ae-assess">{{ evalResult.assessment }}</p>
+              <h6 v-if="evalResult.suggestions && evalResult.suggestions.length">修改建议</h6>
+              <ul class="ae-sugg">
+                <li v-for="(s, i) in evalResult.suggestions" :key="i">{{ s }}</li>
+              </ul>
+            </div>
+          </div>
         </div>
 
         <div class="tabpane chat" v-show="activeTab === 'chat'">
@@ -1030,6 +1085,26 @@ button { font: inherit; cursor: pointer; }
 .qtodo .ti .w { color: var(--warning); flex: none; }
 .qtodo .ti .loc { margin-left: auto; background: var(--raised); border: 1px solid var(--border); color: var(--accent); border-radius: 6px; padding: 3px 10px; font-size: 11px; }
 .qtodo .ti .loc:hover { border-color: var(--accent); }
+
+/* AI 改编评测 */
+.ai-eval { border-top: 1px solid var(--border); margin-top: 14px; padding-top: 13px; }
+.ai-eval .ae-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.ai-eval .ae-head h5 { font-size: 12px; color: var(--text-2); text-transform: uppercase; letter-spacing: 0.08em; }
+.ai-eval .ae-run { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; background: var(--accent); color: #0e1116; border: none; border-radius: 8px; padding: 7px 12px; font-size: 12.5px; font-weight: 600; }
+.ai-eval .ae-run:hover { background: var(--accent-hover); }
+.ai-eval .ae-run:disabled { background: var(--raised); color: var(--muted); cursor: not-allowed; }
+.ai-eval .ae-run svg { width: 14px; height: 14px; }
+.ai-eval .ae-tip { font-size: 12px; color: var(--muted); line-height: 1.6; }
+.ai-eval .ae-top { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.ai-eval .ae-score { font-family: var(--mono); font-size: 30px; font-weight: 600; line-height: 1; }
+.ai-eval .ae-score small { font-size: 12px; color: var(--muted); margin-left: 2px; }
+.ai-eval .ae-badge { font-size: 11px; color: var(--success); background: rgba(63, 185, 80, 0.1); border: 1px solid rgba(63, 185, 80, 0.3); border-radius: 999px; padding: 2px 9px; }
+.ai-eval .ae-badge.rule { color: var(--text-2); background: var(--inset); border-color: var(--border); }
+.ai-eval .ae-assess { font-size: 13px; color: var(--text); line-height: 1.7; margin-bottom: 10px; white-space: pre-wrap; }
+.ai-eval h6 { font-size: 12px; color: var(--text-2); margin-bottom: 7px; }
+.ai-eval .ae-sugg { list-style: none; display: flex; flex-direction: column; gap: 7px; }
+.ai-eval .ae-sugg li { position: relative; font-size: 13px; color: var(--text-2); line-height: 1.6; padding-left: 16px; }
+.ai-eval .ae-sugg li::before { content: '·'; position: absolute; left: 4px; color: var(--accent); font-weight: 700; }
 
 /* AI 对话 */
 .tabpane.chat { display: flex; flex-direction: column; flex: 1; overflow: hidden; padding: 12px; }
