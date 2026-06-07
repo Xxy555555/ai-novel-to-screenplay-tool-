@@ -75,6 +75,16 @@ ScriptForge 的核心（生成管线 + 多轮对话精修 + 测试报告）已�
 - `backend/.../pipeline/QualityEvalStage.java`（新）、`controller/EvaluationController.java`（新）、`controller/GenerationService.java`（取原文）—— PR5
 - 复用：`RefineStage`（服务模式参照）、`QualityReporter`（兜底分数）、`AutoRepair`、`ChatController` 宽松 mapper、`curScene/plainScreenplay/normalize`（前端）
 
+## 修订（Round 2 · 评审反馈）
+
+评审后对 PR1 / PR3 的收紧，均按 **TDD（先写失败测试，再实现）** 推进：
+
+1. **PR3 — 对话回复不得包含元数据**：除「精简、只说改了哪里」外，AI 回复**禁止复述/罗列任何元数据**（标题、语言、generated_by、id、JSON 字段名、Schema 结构等），只用自然语言说明改动位置。
+   - 在 `refineSystem`（中英双语）追加明确禁令；`PromptTemplatesTest` 断言提示含「不要…元数据/字段名/JSON」类约束（先红后绿）。
+2. **PR3 — 改后必须同步到前端展示**：复核 `applyRefined` 重建 `data.value` → 卡片（`curScene` 计算属性）即时刷新、YAML 按 `yamlScope` 重新序列化；以组件测试断言「对话改动后卡片内容随之更新」。
+3. **PR1 — 三栏滚动条未生效的根因修复**：根因是<strong>高度链断裂</strong> —— `App.vue` 的 `n-config-provider` 包裹层使 `.wb{height:100%}` 退化为内容高度，导致整页滚动、三栏不各自滚动。修复：`.wb` 改用视口高度（`height:100dvh`，回退 `100vh`），令三栏在内容超长时各自出现纵向滚动条。
+   - 说明：纯 CSS 渲染/滚动无法在 happy-dom 单测可靠断言；该项以 **Playwright e2e**（真实浏览器，断言每栏 `scrollHeight>clientHeight` 且互不联动）+ `npm run build` + 人工目检验证，属 TDD 对「展示/配置」的合理例外。
+
 ## 验证
 
 - **后端**：`JAVA_HOME="D:/JDK/jdk17" "D:/Maven/apache-maven-3.9.9/bin/mvn" -q test` 全绿。新增 `QualityEvalStage` 单测（stub 走兜底）+ `EvaluationController` 集成测试（`@SpringBootTest(properties="scriptforge.llm.provider=stub")`，断言返回 score/assessment/suggestions，以及无原文的报错路径）。
