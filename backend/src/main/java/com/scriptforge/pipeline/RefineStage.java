@@ -100,6 +100,58 @@ public class RefineStage {
         }
 
         // 解析 {"reply","screenplay"} 信封；容错：模型可能直接回裸剧本对象。
+        Parsed p = parseEnvelope(raw);
+        // 模型偶发不按信封返回（散文 / markdown / 截断）—— 追加纠正指令、重试一次。
+        if (p.refined() == null) {
+            List<LlmClient.ChatMessage> retry = new ArrayList<>(msgs);
+            retry.add(new LlmClient.ChatMessage("user",
+                    "上一次没有按要求返回。请严格只输出 JSON 信封：{\"reply\":\"…\",\"screenplay\":{…完整剧本…}}，"
+                            + "不要任何解释、不要 markdown 代码块。"));
+            try {
+                Parsed p2 = parseEnvelope(llm.chat(sys, retry));
+                if (p2.refined() != null) {
+                    p = p2;
+                }
+            } catch (Exception e) {
+                log.warn("对话精修重试调用失败：{}", e.getMessage());
+            }
+        }
+        String reply = p.reply();
+        Screenplay refined = p.refined();
+
+        if (refined == null) {
+            // 解析不到剧本：绝不把原始输出（可能含 Schema/JSON 转储或被截断的内容）回灌给用户。
+            String note = sanitizeReply(reply);
+            if (note == null || note.isBlank()) {
+                note = "未能解析本次返回的剧本改动，已保留当前剧本，请重试或换一种说法。";
+            }
+            return unchanged(current, note);
+        }
+
+        // 保证 Schema 合法（与生成主链路一致的兜底），再重新评分。
+        AutoRepair.RepairOutcome ro = autoRepair.repair(refined, PipelineListener.NOOP);
+        Screenplay repaired = ro.screenplay();
+        boolean changed = !origJson.equals(canon(repaired));
+        QualityReport report = quality.report(repaired, ro.errorCount());
+        Screenplay withReport = new Screenplay(repaired.meta(), repaired.characters(), repaired.scenes(), report);
+        List<String> errors = errorsOf(withReport);
+
+        // 诚实性兜底：剧本无实际变化时，不沿用模型可能的「过度声称」，如实告知未做可见改动。
+        String r;
+        if (!changed) {
+            r = "本次未改动剧本的可见内容（可能已符合要求；如需修改，请换一种更具体的说法）。";
+        } else {
+            String note = sanitizeReply(reply);
+            r = note != null && !note.isBlank() ? note : "已根据你的指令更新剧本。";
+        }
+        return new RefineResult(r, withReport, changed, ro.errorCount(), errors);
+    }
+
+    /** 解析后的信封：自然语言回复 + 剧本（解析不到时 refined 为 null）。 */
+    private record Parsed(String reply, Screenplay refined) {}
+
+    /** 从模型原始输出解析 {@code {"reply","screenplay"}} 信封；容错裸剧本对象、markdown 围栏与散文包裹。 */
+    private Parsed parseEnvelope(String raw) {
         String reply = null;
         Screenplay refined = null;
         try {
@@ -115,24 +167,7 @@ public class RefineStage {
         } catch (Exception e) {
             log.warn("对话精修输出解析失败：{}", e.getMessage());
         }
-
-        if (refined == null) {
-            String r = reply != null && !reply.isBlank() ? reply
-                    : (raw == null || raw.isBlank() ? "（模型未返回内容）" : raw.strip());
-            return unchanged(current, r);
-        }
-
-        // 保证 Schema 合法（与生成主链路一致的兜底），再重新评分。
-        AutoRepair.RepairOutcome ro = autoRepair.repair(refined, PipelineListener.NOOP);
-        Screenplay repaired = ro.screenplay();
-        boolean changed = !origJson.equals(canon(repaired));
-        QualityReport report = quality.report(repaired, ro.errorCount());
-        Screenplay withReport = new Screenplay(repaired.meta(), repaired.characters(), repaired.scenes(), report);
-        List<String> errors = errorsOf(withReport);
-
-        String r = reply != null && !reply.isBlank() ? reply
-                : (changed ? "已根据你的指令更新剧本。" : "剧本未发生变化。");
-        return new RefineResult(r, withReport, changed, ro.errorCount(), errors);
+        return new Parsed(reply, refined);
     }
 
     private RefineResult unchanged(Screenplay sp, String reply) {
@@ -154,6 +189,25 @@ public class RefineStage {
         } catch (Exception e) {
             return List.of("序列化失败: " + e.getMessage());
         }
+    }
+
+    /**
+     * 清洗 AI 自然语言回复：去 markdown 围栏、截断到首个 JSON 大括号之前、限制长度。
+     * 目的：回复只保留「改了哪里」的自然语言，绝不把 Schema / JSON 转储灌给用户（评审反馈）。
+     */
+    static String sanitizeReply(String s) {
+        if (s == null) {
+            return null;
+        }
+        String t = s.replace("```json", " ").replace("```JSON", " ").replace("```", " ").trim();
+        int brace = t.indexOf('{');
+        if (brace >= 0) {
+            t = t.substring(0, brace).trim();
+        }
+        if (t.length() > 300) {
+            t = t.substring(0, 300).trim() + "…";
+        }
+        return t;
     }
 
     /** 容错：去掉可能的 ```json 围栏，截取首个 '{' 到末个 '}' 之间的 JSON。 */

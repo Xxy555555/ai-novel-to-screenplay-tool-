@@ -321,7 +321,9 @@ async function sendChat() {
     if (resp.changed && resp.screenplay) {
       applyRefined(resp.screenplay)
       setValid(resp.valid !== false)
-      toast('AI 已更新剧本' + (resp.valid === false ? '（仍有校验问题）' : ' · Schema 合法'))
+      toast('AI 已更新剧本' + (resp.valid === false ? '（仍有校验问题）' : ' · 已同步到卡片/YAML'))
+    } else {
+      toast('AI 未对剧本做改动')
     }
   } catch (e) {
     const m = e.response?.data?.message || e.message || '对话失败'

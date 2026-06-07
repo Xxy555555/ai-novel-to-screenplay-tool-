@@ -132,13 +132,25 @@ public final class PromptTemplates {
                     + "did not mention. Keep the same JSON structure (meta / characters / scenes / report) and the "
                     + "same id scheme (characters C1.., scenes S1.., character references by id). Output STRICT JSON "
                     + "ONLY in this exact shape, no markdown, no prose:\n"
-                    + "{ \"reply\": \"<short note describing what you changed>\", \"screenplay\": { ...full screenplay... } }";
+                    + "{ \"reply\": \"<what changed>\", \"screenplay\": { ...full screenplay... } }\n"
+                    + "The \"reply\" MUST be as short as possible (1-2 sentences) and user-facing: describe ONLY what the user can "
+                    + "see change on screen — the scene outline, the scene cards, or the character bible "
+                    + "(e.g. \"Rewrote the dialogue in scene 2 to be punchier; added a voice-over for the lead.\"). "
+                    + "NEVER mention internal field names, metadata or data structure (no meta, title, source_title, "
+                    + "source, language, generated_by, JSON, schema, ids-as-fields) — the user does not understand those terms. "
+                    + "If nothing user-visible changed, say so plainly. No greetings, apologies, or restating the screenplay.";
         }
         return "你是剧本精修助手。给定「当前剧本」与「用户指令」，请返回修改后的<strong>完整剧本</strong>，"
                 + "保留用户未提及的场景/角色，沿用相同结构（meta / characters / scenes / report）与 id 体系"
                 + "（角色 C1.. 场景 S1.. 对白以角色 id 引用）。只输出严格合法的 JSON（不要 markdown、不要解释），"
                 + "且必须是以下信封形状：\n"
-                + "{ \"reply\": \"<对所做修改的简要中文说明>\", \"screenplay\": { …完整剧本… } }";
+                + "{ \"reply\": \"<改了哪里>\", \"screenplay\": { …完整剧本… } }\n"
+                + "其中 reply 必须简短（1～2 句）且<strong>面向用户</strong>：只描述用户在<strong>页面</strong>上能看到的变化"
+                + "——即「场景大纲」「场景卡片」或「角色圣经」里的改动"
+                + "（例如「把第 2 场的对白改得更利落了；给主角加了一句画外音」「把场景大纲里的地点和时间改成了中文」）。"
+                + "<strong>绝不要提到任何元数据、内部字段名或数据结构</strong>"
+                + "（不要出现 meta、title、source_title、source、language、generated_by、JSON、Schema、字段 等用户看不懂的术语）。"
+                + "若本次没有改变用户在页面上能看到的内容，就直说「未改动可见内容」。不要寒暄、不要道歉、不要复述剧本。";
     }
 
     /**

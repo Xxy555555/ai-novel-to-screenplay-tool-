@@ -5,6 +5,10 @@ import java.util.Optional;
 
 import org.junit.jupiter.api.Test;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.PropertyNamingStrategies;
+import com.scriptforge.llm.LlmClient;
 import com.scriptforge.llm.LlmProperties;
 import com.scriptforge.llm.StubLlmClient;
 import com.scriptforge.model.Character;
@@ -116,6 +120,100 @@ class RefineStageTest {
         assertEquals(2, r.screenplay().scenes().size());
         assertNotNull(r.reply());
         assertFalse(r.reply().isBlank());
+    }
+
+    /** 用指定的假 LLM 构造 RefineStage。 */
+    private RefineStage newRefineWith(LlmClient llm) {
+        LlmProperties props = new LlmProperties();
+        StubLlmClient stub = new StubLlmClient(props);
+        SchemaValidator validator = new SchemaValidator();
+        AutoRepair repair = new AutoRepair(validator, stub, props);
+        QualityReporter quality = new QualityReporter();
+        return new RefineStage(llm, repair, quality, validator);
+    }
+
+    /** 固定返回 {@code raw} 的假 LLM（每次调用都一样）。 */
+    private RefineStage refineReturning(String raw) {
+        return newRefineWith(new LlmClient() {
+            @Override public String complete(String s, String u) { return raw; }
+            @Override public String describe() { return "fake"; }
+            @Override public String chat(String s, List<LlmClient.ChatMessage> m) { return raw; }
+        });
+    }
+
+    @Test
+    void retriesOnceWhenFirstOutputIsUnparseable() {
+        // 真实模型偶发：第一次回散文（无信封），纠正后第二次回合法信封。
+        String[] outs = {
+                "你好，我理解你的需求是重写所有场景。让我想想该怎么改……（这里没有按要求输出 JSON）",
+                "{\"reply\":\"已重写所有场景\",\"screenplay\":" + VALID_SP + "}",
+        };
+        int[] n = {0};
+        LlmClient flaky = new LlmClient() {
+            @Override public String complete(String s, String u) { return next(); }
+            @Override public String describe() { return "flaky"; }
+            @Override public String chat(String s, List<LlmClient.ChatMessage> m) { return next(); }
+            private String next() { return outs[Math.min(n[0]++, outs.length - 1)]; }
+        };
+        RefineStage.RefineResult r = newRefineWith(flaky).refine(baseScreenplay(), "重写所有场景", List.of(), "zh");
+        assertTrue(r.changed(), "纠正重试后应成功解析并改动");
+        assertEquals("群山回唱", r.screenplay().meta().title());
+        assertEquals(2, n[0], "应恰好调用模型两次（首次 + 一次重试）");
+    }
+
+    private static final String VALID_SP =
+            "{\"meta\":{\"title\":\"群山回唱\",\"language\":\"zh\"},"
+            + "\"characters\":[{\"id\":\"C1\",\"name\":\"林深\"}],"
+            + "\"scenes\":[{\"id\":\"S1\",\"heading\":{\"int_ext\":\"INT\",\"location\":\"书房\",\"time_of_day\":\"夜\"},"
+            + "\"present_characters\":[\"C1\"],\"elements\":[{\"type\":\"action\",\"text\":\"林深推门而入。\"}]}]}";
+
+    @Test
+    void garbledOrTruncatedOutputIsNotEchoedAsReply() {
+        // 真实模型把剧本/Schema 当文本吐回、且 JSON 被截断 → 无法解析为剧本。
+        String raw = "好的，这是更新后的剧本以及它遵循的 Schema：\n```json\n"
+                + "{\"meta\":{\"title\":\"X\"},\"scenes\":[{\"id\":\"S1\",\"heading\":{\"int_ext\":\"INT\"";
+        RefineStage.RefineResult r = refineReturning(raw).refine(baseScreenplay(), "把 S1 改紧张", List.of(), "zh");
+        assertFalse(r.changed(), "无法解析时不应改动");
+        assertEquals(2, r.screenplay().scenes().size(), "应保留原剧本");
+        assertFalse(r.reply().contains("\"scenes\""), "回复不应包含 Schema/JSON 字段转储");
+        assertFalse(r.reply().contains("```"), "回复不应包含 markdown 围栏");
+        assertTrue(r.reply().length() < 200, "回复应简短");
+    }
+
+    @Test
+    void verboseReplyWithEmbeddedJsonIsSanitized() {
+        // 模型返回了合法信封，但 reply 里塞了 Schema/JSON 转储。
+        String raw = "{\"reply\":\"已把标题改为群山回唱。完整 Schema 如下：{\\\"scenes\\\":[{\\\"id\\\":\\\"S1\\\"}]} 以上。\","
+                + "\"screenplay\":" + VALID_SP + "}";
+        RefineStage.RefineResult r = refineReturning(raw).refine(baseScreenplay(), "把标题改为群山回唱", List.of(), "zh");
+        assertTrue(r.changed(), "应解析出剧本并判定改动");
+        assertEquals("群山回唱", r.screenplay().meta().title());
+        assertTrue(r.reply().contains("已把标题改为群山回唱"), "应保留自然语言部分");
+        assertFalse(r.reply().contains("\"scenes\""), "应剔除 reply 中的 Schema/JSON 转储");
+    }
+
+    @Test
+    void markdownWrappedEnvelopeStillSyncs() {
+        // 回归：模型用 ```json 围栏 + 前后散文包裹合法信封，仍应解析并同步。
+        String raw = "当然，这是结果：\n```json\n{\"reply\":\"已把标题改为群山回唱\",\"screenplay\":" + VALID_SP + "}\n```";
+        RefineStage.RefineResult r = refineReturning(raw).refine(baseScreenplay(), "把标题改为群山回唱", List.of(), "zh");
+        assertTrue(r.changed());
+        assertEquals("群山回唱", r.screenplay().meta().title());
+        assertEquals("已把标题改为群山回唱", r.reply());
+    }
+
+    @Test
+    void noVisibleChangeReplyIsHonestEvenIfModelOverclaims() throws Exception {
+        // 模型返回与输入完全相同的剧本（无实际改动），却在 reply 里声称改了 —— 回复必须如实告知未改动。
+        ObjectMapper m = new ObjectMapper()
+                .setPropertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE)
+                .setSerializationInclusion(JsonInclude.Include.NON_EMPTY);
+        String spJson = m.writeValueAsString(baseScreenplay());
+        String raw = "{\"reply\":\"已把场景大纲和角色圣经都改成中文了\",\"screenplay\":" + spJson + "}";
+        RefineStage.RefineResult r = refineReturning(raw).refine(baseScreenplay(), "场景大纲和角色圣经使用中文", List.of(), "zh");
+        assertFalse(r.changed(), "剧本无实际变化");
+        assertFalse(r.reply().contains("已把场景大纲"), "不应沿用模型对未发生改动的过度声称");
+        assertTrue(r.reply().contains("未改动") || r.reply().contains("没有"), "应如实告知未做可见改动");
     }
 
     @Test

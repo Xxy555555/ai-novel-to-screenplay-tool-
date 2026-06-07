@@ -43,12 +43,16 @@ describe('api/http', () => {
       language: 'zh',
     })
     expect(out).toEqual(resp)
-    expect(mockPost).toHaveBeenCalledWith('/chat', {
-      screenplay: sp,
-      message: '把 S2 改得更紧张',
-      history: [{ role: 'assistant', content: 'hi' }],
-      language: 'zh',
-    })
+    expect(mockPost).toHaveBeenCalledWith(
+      '/chat',
+      {
+        screenplay: sp,
+        message: '把 S2 改得更紧张',
+        history: [{ role: 'assistant', content: 'hi' }],
+        language: 'zh',
+      },
+      { timeout: 300000 },
+    )
   })
 
   it('validateYaml 向 /validate 提交 yaml', async () => {

@@ -38,7 +38,8 @@ export function createSession({ sampleId, text, language, title, requirements } 
  * @param {string} [p.language] 语言
  */
 export function chatRefine({ screenplay, message, history, language } = {}) {
-  return http.post('/chat', { screenplay, message, history, language }).then((r) => r.data)
+  // 大剧本的整本改写较慢（单次可达 ~80s），且后端遇瞬时错误会重试一次，故放宽到 300s。
+  return http.post('/chat', { screenplay, message, history, language }, { timeout: 300000 }).then((r) => r.data)
 }
 
 /** SSE 流地址（交给 EventSource / openGeneration 使用，走 Vite 代理）。 */

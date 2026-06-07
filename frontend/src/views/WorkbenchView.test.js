@@ -125,6 +125,23 @@ describe('WorkbenchView —— AI 多轮对话精修（Feature 1b）', () => {
     expect(full).toContain('title: 测试剧本')
   })
 
+  it('changed=false 时不替换剧本（保持原内容）（Feature 2）', async () => {
+    const { w } = await mountWorkbench()
+    mockChatRefine.mockResolvedValue({
+      reply: '没有需要修改的地方。',
+      changed: false,
+      valid: true,
+      screenplay: sampleScreenplay('紧张'),
+    })
+    await w.findAll('.tabs button')[2].trigger('click')
+    await w.find('.chat-input textarea').setValue('保持不变')
+    await w.find('.chat-input .send').trigger('click')
+    await flushPromises()
+    expect(w.find('.tabpane.chat').text()).toContain('没有需要修改的地方')
+    // 未发生改动：卡片情绪仍为初始「平静」，未被 changed=false 的返回剧本替换
+    expect(w.find('.atag.mood').text()).toContain('平静')
+  })
+
   it('chatRefine 出错时追加错误气泡且不崩溃', async () => {
     const { w } = await mountWorkbench()
     mockChatRefine.mockRejectedValue({ message: '网络中断' })
