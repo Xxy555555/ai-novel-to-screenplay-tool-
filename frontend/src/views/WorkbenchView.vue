@@ -5,9 +5,8 @@ import jsyaml from 'js-yaml'
 import { useAppStore } from '@/stores/app'
 import { useChatStore } from '@/stores/chat'
 import { fetchScreenplay, validateYaml, chatRefine, evaluateQuality } from '@/api/http'
-import { diffScreenplay } from '@/utils/screenplayDiff'
+import { diffScreenplay, applyDiffChange } from '@/utils/screenplayDiff'
 import { streamChat } from '@/api/sse'
-import { extractReplyFromPartial } from '@/utils/replyExtract'
 
 const router = useRouter()
 const store = useAppStore()
@@ -38,6 +37,7 @@ const chatMessages = computed(() => chat.messages) // 当前线程消息
 const chatInput = ref('')
 const chatBusy = ref(false)
 const chatScroll = ref(null)
+const centerEl = ref(null) // 中心栏根元素（用于 diff 锚定滚动）
 const threadsOpen = ref(false) // 历史线程列表展开
 
 // ───────── AI 质量评测 ─────────
@@ -290,8 +290,16 @@ function selectScene(id) {
   if (viewMode.value === 'yaml' && yamlScope.value === 'scene') syncYamlFromModel()
   if (window.innerWidth <= 900) leftOpen.value = false
   nextTick(() => {
-    const c = document.querySelector('.center')
-    if (c) c.scrollTop = 0
+    const root = centerEl.value
+    // diff 待确认时：点击大纲锚定（滚动）到对应改动场景；否则回到顶部。
+    if (pendingDiff.value && root) {
+      const el = root.querySelector('#dscene-' + id)
+      if (el && el.scrollIntoView) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+        return
+      }
+    }
+    if (root) root.scrollTop = 0
   })
 }
 function toggleChar(id) {
@@ -350,28 +358,22 @@ async function sendChat() {
     .map((m) => ({ role: m.role, content: m.content }))
   chat.appendMessage('user', msg)
   chatInput.value = ''
-  chatBusy.value = true
-  chat.appendMessage('assistant', '') // 流式占位气泡，逐字填充
+  chatBusy.value = true // 执行中只显示「正在输入」动画，不逐字泄露中间文字
   chatScrollToBottom()
   const payload = { screenplay: plainScreenplay(), message: msg, history, language: store.source?.language || 'auto' }
 
   const onResult = (resp) => {
-    chat.updateLastAssistant(resp.reply || '（无回复）')
+    // 执行完成后才一次性输出回复（而非流式逐字）。
+    chat.appendMessage('assistant', resp.reply || '（无回复）')
     if (resp.changed && resp.screenplay) proposeRefined(resp.screenplay)
     else toast('AI 未对剧本做改动')
   }
 
-  let raw = ''
   let done = false
   let streamErr = null
   try {
     await streamChat(payload, {
-      onToken: (chunk) => {
-        raw += chunk
-        const reply = extractReplyFromPartial(raw)
-        if (reply) chat.updateLastAssistant(reply)
-        chatScrollToBottom()
-      },
+      onToken: () => {}, // 仍走流式（后端/网络更稳），但执行中不显示中间文字
       onDone: (resp) => {
         done = true
         onResult(resp)
@@ -388,7 +390,7 @@ async function sendChat() {
     }
   } catch (e) {
     const m = e.response?.data?.message || e.message || '对话失败'
-    chat.updateLastAssistant('出错了：' + m)
+    chat.appendMessage('assistant', '出错了：' + m)
     toast('对话失败：' + m)
   } finally {
     chatBusy.value = false
@@ -479,12 +481,36 @@ function acceptPending() {
   toast('已采纳改动 · 已同步到卡片/YAML')
   chatScrollToBottom()
 }
-// 拒绝：丢弃待确认，保留当前剧本。
+// 拒绝：丢弃尚未采纳的改动，保留当前剧本（含已逐行采纳的部分）。
 function rejectPending() {
   clearPending()
-  chat.appendMessage('assistant', '↩️ 已拒绝本次改动，剧本保持不变。')
-  toast('已拒绝改动 · 剧本未变')
+  chat.appendMessage('assistant', '↩️ 已拒绝剩余改动。')
+  toast('已拒绝剩余改动')
   chatScrollToBottom()
+}
+
+// 把改动场景的 op 映射为整场采纳指令。
+function sceneChange(s) {
+  if (s.op === 'added') return { kind: 'scene-add', id: s.id }
+  if (s.op === 'removed') return { kind: 'scene-del', id: s.id }
+  return { kind: 'scene-replace', id: s.id }
+}
+// 逐行采纳：把单条改动应用到当前剧本并重算 diff（采纳完则收敛关闭）。
+function acceptChange(change) {
+  if (!pendingScreenplay.value) return
+  const target = pendingScreenplay.value
+  const next = applyDiffChange(plainScreenplay(), target, change)
+  applyRefined(next)
+  const d = diffScreenplay(plainScreenplay(), target)
+  if (!d.changed) {
+    clearPending()
+    setValid(true)
+    chat.appendMessage('assistant', '✅ 已采纳全部改动，并同步到卡片/YAML。')
+    toast('已采纳全部改动 · 已同步')
+    chatScrollToBottom()
+  } else {
+    pendingDiff.value = d
+  }
 }
 function clearPending() {
   pendingScreenplay.value = null
@@ -723,7 +749,7 @@ function onDocClick(e) {
       </aside>
 
       <!-- CENTER -->
-      <main class="pane center">
+      <main class="pane center" ref="centerEl">
         <div class="ctool">
           <div class="seg">
             <button :class="{ on: viewMode === 'cards' }" @click="switchView('cards')">
@@ -747,23 +773,26 @@ function onDocClick(e) {
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3v12M6 21a3 3 0 100-6 3 3 0 000 6zM6 9a3 3 0 100-6 3 3 0 000 6zM18 9a3 3 0 100-6 3 3 0 000 6zM18 9v3a3 3 0 01-3 3H9" /></svg>
             <span class="dsum">AI 提议改动 · {{ pendingDiff.summary }}</span>
             <span class="sp"></span>
-            <button class="accept" @click="acceptPending">✓ 采纳</button>
-            <button class="reject" @click="rejectPending">✕ 拒绝</button>
+            <span class="dhint">每行可单独「采纳」，或一键</span>
+            <button class="accept" @click="acceptPending">✓ 全部采纳</button>
+            <button class="reject" @click="rejectPending">✕ 拒绝剩余</button>
           </div>
           <div class="dmeta" v-if="pendingDiff.meta.length || pendingDiff.characters.added.length || pendingDiff.characters.removed.length || pendingDiff.characters.changed.length">
-            <div v-for="m in pendingDiff.meta" :key="m.field" class="dmrow"><b>{{ metaLabel(m.field) }}</b>：<span class="old">{{ fmtVal(m.before) }}</span> → <span class="new">{{ fmtVal(m.after) }}</span></div>
-            <div v-for="c in pendingDiff.characters.added" :key="'ca' + c.id" class="dmrow add">＋ 新增角色：{{ c.name }}</div>
-            <div v-for="c in pendingDiff.characters.removed" :key="'cr' + c.id" class="dmrow del">－ 删除角色：{{ c.name }}</div>
-            <div v-for="c in pendingDiff.characters.changed" :key="'cc' + c.id" class="dmrow">角色「{{ c.name }}」：{{ c.fields.map((f) => fieldLabel(f.field)).join('、') }} 有改动</div>
+            <div v-for="m in pendingDiff.meta" :key="m.field" class="dmrow"><span class="dm-txt"><b>{{ metaLabel(m.field) }}</b>：<span class="old">{{ fmtVal(m.before) }}</span> → <span class="new">{{ fmtVal(m.after) }}</span></span><button class="dm-adopt" @click="acceptChange({ kind: 'meta', field: m.field })">采纳</button></div>
+            <div v-for="c in pendingDiff.characters.added" :key="'ca' + c.id" class="dmrow add"><span class="dm-txt">＋ 新增角色：{{ c.name }}</span><button class="dm-adopt" @click="acceptChange({ kind: 'char-add', id: c.id })">采纳</button></div>
+            <div v-for="c in pendingDiff.characters.removed" :key="'cr' + c.id" class="dmrow del"><span class="dm-txt">－ 删除角色：{{ c.name }}</span><button class="dm-adopt" @click="acceptChange({ kind: 'char-del', id: c.id })">采纳</button></div>
+            <div v-for="c in pendingDiff.characters.changed" :key="'cc' + c.id" class="dmrow"><span class="dm-txt">角色「{{ c.name }}」：{{ c.fields.map((f) => fieldLabel(f.field)).join('、') }} 有改动</span><button class="dm-adopt" @click="acceptChange({ kind: 'char-change', id: c.id })">采纳</button></div>
           </div>
-          <div class="dscene" v-for="s in changedScenes" :key="s.id" :class="s.op">
+          <div class="dscene" v-for="s in changedScenes" :key="s.id" :id="'dscene-' + s.id" :class="s.op">
             <div class="ds-head">
               <span class="op-badge" :class="s.op">{{ opLabel(s.op) }}</span>
               <span class="sid">{{ s.id }}</span>
               <b>{{ (s.scene.heading && s.scene.heading.location) || '未命名' }}</b> · {{ (s.scene.heading && s.scene.heading.time_of_day) || '—' }}
+              <span class="sp"></span>
+              <button class="ds-adopt" @click="acceptChange(sceneChange(s))">{{ s.op === 'changed' ? '采纳本场' : '采纳' }}</button>
             </div>
             <div class="ds-fields" v-if="s.fields && s.fields.length">
-              <span v-for="f in s.fields" :key="f.field" class="dchip">{{ fieldLabel(f.field) }}：{{ fmtVal(f.before) }} → {{ fmtVal(f.after) }}</span>
+              <span v-for="f in s.fields" :key="f.field" class="dchip">{{ fieldLabel(f.field) }}：{{ fmtVal(f.before) }} → {{ fmtVal(f.after) }}<button class="dc-adopt" @click="acceptChange({ kind: 'scene-field', id: s.id, field: f.field })">采纳</button></span>
             </div>
             <div class="ds-els">
               <div v-for="(e, i) in s.elements" :key="i" class="delrow" :class="e.op">
@@ -771,6 +800,7 @@ function onDocClick(e) {
                 <span class="etype">{{ TYPE_LABEL[e.element.type] || e.element.type }}</span>
                 <span v-if="isSpoken(e.element)" class="who">{{ charName(e.element.character) }}：</span>
                 <span class="etxt">{{ e.element.line || e.element.text }}</span>
+                <button v-if="e.op !== 'same'" class="dl-adopt" @click="acceptChange({ kind: 'element', id: s.id, rowIndex: i })">采纳</button>
               </div>
             </div>
           </div>
@@ -1169,6 +1199,22 @@ button { font: inherit; cursor: pointer; }
 .delrow.add .mark, .delrow.add .etxt { color: var(--success); }
 .delrow.del { background: rgba(248, 81, 73, 0.09); }
 .delrow.del .mark, .delrow.del .etxt { color: var(--danger); text-decoration: line-through; }
+
+/* 逐行采纳：行内小按钮 */
+.diffbar .dhint { font-size: 11px; color: var(--muted); margin-right: 2px; }
+.dmeta .dmrow { display: flex; align-items: baseline; gap: 8px; }
+.dmeta .dm-txt { flex: 1; min-width: 0; }
+.ds-fields .dchip { display: inline-flex; align-items: center; gap: 7px; }
+.ds-head .sp { flex: 1; }
+.delrow .etxt { flex: 1; }
+.dl-adopt, .dc-adopt, .ds-adopt, .dm-adopt {
+  flex: none; background: var(--accent-soft); border: 1px solid rgba(232, 179, 73, 0.35);
+  color: var(--accent); border-radius: 6px; padding: 1px 9px; font-size: 11.5px; line-height: 1.6; white-space: nowrap;
+}
+.dl-adopt:hover, .dc-adopt:hover, .ds-adopt:hover, .dm-adopt:hover { border-color: var(--accent); }
+.ds-adopt { padding: 3px 11px; font-size: 12px; }
+/* del 行的删除线不应波及采纳按钮 */
+.delrow.del .dl-adopt { text-decoration: none; color: var(--accent); }
 .scard { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; scroll-margin-top: 70px; box-shadow: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 8px 24px rgba(0, 0, 0, 0.32); }
 .scard.sel { border-color: var(--border-strong); }
 .scard.warn { border-color: rgba(210, 153, 34, 0.4); }
@@ -1239,7 +1285,10 @@ button { font: inherit; cursor: pointer; }
 .yaml-bar button:hover { border-color: var(--accent); color: var(--accent); }
 .yamled { flex: 1; display: flex; min-height: 0; }
 .gutter { font-family: var(--mono); font-size: 13px; line-height: 1.6; color: var(--muted); text-align: right; padding: 14px 8px 14px 14px; background: var(--inset); user-select: none; white-space: pre; margin: 0; }
-.yta { flex: 1; background: var(--inset); color: var(--text); border: none; resize: none; font-family: var(--mono); font-size: 13px; line-height: 1.6; padding: 14px 16px 14px 10px; outline: none; white-space: pre; tab-size: 2; }
+/* field-sizing:content 让文本域按内容自然增高、自身不再出现内部滚动条，
+   从而由 .center 统一承担纵向滚动 —— 与「场景卡片」一致，同时只展示一个滚动条。
+   附带好处：行号 gutter 与正文随 .center 同步滚动，不再错位。 */
+.yta { flex: 1; field-sizing: content; background: var(--inset); color: var(--text); border: none; resize: none; font-family: var(--mono); font-size: 13px; line-height: 1.6; padding: 14px 16px 14px 10px; outline: none; white-space: pre; tab-size: 2; }
 .yta:focus { box-shadow: inset 3px 0 0 var(--accent); }
 
 /* right panel */

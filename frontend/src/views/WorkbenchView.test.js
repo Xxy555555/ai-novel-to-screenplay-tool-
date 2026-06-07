@@ -65,25 +65,92 @@ describe('WorkbenchView —— AI 多轮对话精修（Feature 1b）', () => {
     localStorage.clear()
   })
 
-  it('流式对话：逐字显示回复，完成后出现 diff（Feature: streaming）', async () => {
+  it('对话执行中不显示文字（只显示等待动画），完成后才一次性输出回复 + diff（Feature: 完成后输出）', async () => {
     const { w } = await mountWorkbench()
-    // 模拟流式：分块吐出信封原始文本（前端从中提取 reply），最后 onDone 给最终结果。
-    mockStreamChat.mockImplementation(async (_payload, h) => {
-      h.onToken('{"reply":"已把')
-      h.onToken(' S1 改得更紧张')
-      h.onToken('","screenplay":{}}')
-      h.onDone({ reply: '已把 S1 改得更紧张。', changed: true, valid: true, screenplay: sampleScreenplay('紧张') })
+    // 受控流：先吐 token（不应被显示），等到我们手动 resolve 时才 onDone。
+    let finish
+    mockStreamChat.mockImplementation((_payload, h) => {
+      h.onToken('{"reply":"执行中的部分文字')
+      return new Promise((resolve) => {
+        finish = () => {
+          h.onDone({ reply: '已把 S1 改得更紧张。', changed: true, valid: true, screenplay: sampleScreenplay('紧张') })
+          resolve()
+        }
+      })
     })
     await w.findAll('.tabs button')[2].trigger('click')
     await w.find('.chat-input textarea').setValue('把 S1 改得更紧张')
     await w.find('.chat-input .send').trigger('click')
     await flushPromises()
 
-    expect(mockStreamChat).toHaveBeenCalledTimes(1)
-    // 流式回复出现在对话区
+    // 执行中：显示「正在输入」动画，且不泄露流式中间文字
+    expect(w.find('.chat-msgs .bubble.typing').exists()).toBe(true)
+    expect(w.find('.tabpane.chat').text()).not.toContain('执行中的部分文字')
+
+    // 执行完成后：一次性输出回复并进入 diff 待确认
+    finish()
+    await flushPromises()
+    expect(w.find('.chat-msgs .bubble.typing').exists()).toBe(false)
     expect(w.find('.tabpane.chat').text()).toContain('已把 S1 改得更紧张')
-    // 完成后进入 diff 待确认
     expect(w.find('.diffpane').exists()).toBe(true)
+  })
+
+  it('diff 支持「逐行采纳」与「全部采纳」（Feature: 逐行采纳）', async () => {
+    const { w } = await mountWorkbench()
+    // 目标剧本：改情绪 + 新增一条对白
+    const after = sampleScreenplay('紧张')
+    after.scenes[0].elements.push({ type: 'dialogue', character: 'C1', line: '我回来了。' })
+    mockChatRefine.mockResolvedValue({ reply: '好', changed: true, valid: true, screenplay: after })
+
+    await w.findAll('.tabs button')[2].trigger('click')
+    await w.find('.chat-input textarea').setValue('改一改')
+    await w.find('.chat-input .send').trigger('click')
+    await flushPromises()
+    expect(w.find('.diffpane').exists()).toBe(true)
+
+    // 逐行采纳：先采纳「新增元素」那一行
+    const elAdopt = w.findAll('.ds-els .delrow.add .dl-adopt')
+    expect(elAdopt.length).toBe(1)
+    await elAdopt[0].trigger('click')
+    await flushPromises()
+    // diff 仍在（情绪尚未采纳），且该新增行已消失
+    expect(w.find('.diffpane').exists()).toBe(true)
+    expect(w.findAll('.ds-els .delrow.add').length).toBe(0)
+
+    // 再逐行采纳「情绪」字段块 → diff 收敛关闭，改动全部落地
+    const fieldAdopt = w.findAll('.ds-fields .dc-adopt')
+    expect(fieldAdopt.length).toBe(1)
+    await fieldAdopt[0].trigger('click')
+    await flushPromises()
+    expect(w.find('.diffpane').exists()).toBe(false)
+    expect(w.find('.atag.mood').text()).toContain('紧张')
+    // 新增对白落到卡片（台词在 input 里，取其 value）
+    const lines = w.findAll('.cards .erow input.etext').map((i) => i.element.value)
+    expect(lines).toContain('我回来了。')
+  })
+
+  it('diff 中点击左侧场景大纲，锚定（滚动）到对应改动场景（Feature: 锚定）', async () => {
+    const spy = vi.fn()
+    const orig = Element.prototype.scrollIntoView
+    Element.prototype.scrollIntoView = spy
+    try {
+      const { w } = await mountWorkbench()
+      mockChatRefine.mockResolvedValue({ reply: '好', changed: true, valid: true, screenplay: sampleScreenplay('紧张') })
+      await w.findAll('.tabs button')[2].trigger('click')
+      await w.find('.chat-input textarea').setValue('改一改')
+      await w.find('.chat-input .send').trigger('click')
+      await flushPromises()
+      expect(w.find('.diffpane').exists()).toBe(true)
+      // 每个改动场景带锚点 id
+      expect(w.find('#dscene-S1').exists()).toBe(true)
+      // 点击左侧大纲 S1 → 触发滚动锚定
+      spy.mockClear()
+      await w.findAll('.outline .oi')[0].trigger('click')
+      await flushPromises()
+      expect(spy).toHaveBeenCalled()
+    } finally {
+      Element.prototype.scrollIntoView = orig
+    }
   })
 
   it('AI 评测：点「开始评测」展示评分/评价/建议（Feature 4）', async () => {

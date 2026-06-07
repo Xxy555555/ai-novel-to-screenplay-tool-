@@ -142,3 +142,103 @@ export function diffScreenplay(oldSp, newSp) {
 
   return { changed, summary, meta, characters, scenes }
 }
+
+const clone = (o) => JSON.parse(JSON.stringify(o))
+
+/**
+ * 逐行采纳：把「目标剧本 newSp」中的<单个改动>应用到「当前剧本 oldSp」，返回新剧本（纯函数，不改输入）。
+ * 配合 diffScreenplay 的渲染：每应用一条后调用方应重新 diff（采纳的行会变成 same 而从 diff 中消失）。
+ *
+ * change 形态：
+ *  - {kind:'meta', field}
+ *  - {kind:'char-add'|'char-del'|'char-change', id}
+ *  - {kind:'scene-add'|'scene-del'|'scene-replace', id}
+ *  - {kind:'scene-field', id, field}   // field 可为 'heading.location' 等
+ *  - {kind:'element', id, rowIndex}    // rowIndex = 该场景元素 diff（diffElements(当前,目标)）中的行下标
+ */
+export function applyDiffChange(oldSp, newSp, change) {
+  const out = clone(oldSp || {})
+  out.meta = out.meta || {}
+  out.characters = out.characters || []
+  out.scenes = out.scenes || []
+  const tgt = newSp || {}
+  const findScene = (sp, id) => (sp.scenes || []).find((s) => s.id === id)
+
+  switch (change.kind) {
+    case 'meta': {
+      const f = change.field
+      if (tgt.meta && Object.prototype.hasOwnProperty.call(tgt.meta, f) && tgt.meta[f] != null) out.meta[f] = clone(tgt.meta[f])
+      else delete out.meta[f]
+      break
+    }
+    case 'char-add': {
+      const c = (tgt.characters || []).find((x) => x.id === change.id)
+      if (c && !out.characters.find((x) => x.id === change.id)) {
+        const pos = (tgt.characters || []).findIndex((x) => x.id === change.id)
+        out.characters.splice(Math.min(pos < 0 ? out.characters.length : pos, out.characters.length), 0, clone(c))
+      }
+      break
+    }
+    case 'char-del': {
+      out.characters = out.characters.filter((x) => x.id !== change.id)
+      break
+    }
+    case 'char-change': {
+      const c = (tgt.characters || []).find((x) => x.id === change.id)
+      const i = out.characters.findIndex((x) => x.id === change.id)
+      if (c && i >= 0) out.characters.splice(i, 1, clone(c))
+      break
+    }
+    case 'scene-add': {
+      const s = findScene(tgt, change.id)
+      if (s && !findScene(out, change.id)) {
+        const pos = (tgt.scenes || []).findIndex((x) => x.id === change.id)
+        out.scenes.splice(Math.min(pos < 0 ? out.scenes.length : pos, out.scenes.length), 0, clone(s))
+      }
+      break
+    }
+    case 'scene-del': {
+      out.scenes = out.scenes.filter((x) => x.id !== change.id)
+      break
+    }
+    case 'scene-replace': {
+      const s = findScene(tgt, change.id)
+      const i = out.scenes.findIndex((x) => x.id === change.id)
+      if (s && i >= 0) out.scenes.splice(i, 1, clone(s))
+      break
+    }
+    case 'scene-field': {
+      const os = findScene(out, change.id)
+      const ts = findScene(tgt, change.id)
+      if (os && ts) {
+        const f = change.field
+        if (f.startsWith('heading.')) {
+          const sub = f.slice('heading.'.length)
+          os.heading = os.heading || {}
+          os.heading[sub] = clone((ts.heading || {})[sub])
+        } else {
+          os[f] = clone(ts[f])
+        }
+      }
+      break
+    }
+    case 'element': {
+      const os = findScene(out, change.id)
+      const ts = findScene(tgt, change.id)
+      if (os && ts) {
+        const rows = diffElements(os.elements || [], ts.elements || [])
+        const newEls = []
+        rows.forEach((r, idx) => {
+          if (r.op === 'same') newEls.push(r.element)
+          else if (r.op === 'add') { if (idx === change.rowIndex) newEls.push(r.element) }
+          else if (r.op === 'del') { if (idx !== change.rowIndex) newEls.push(r.element) }
+        })
+        os.elements = newEls
+      }
+      break
+    }
+    default:
+      break
+  }
+  return out
+}
