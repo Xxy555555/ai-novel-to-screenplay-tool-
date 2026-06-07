@@ -3,7 +3,14 @@
 把 3 章以上的小说，一键转换为**结构化、可校验、可视化编辑**的剧本初稿（YAML）。
 
 > 状态：**端到端可运行**。后端三阶段管线 + 前端三屏全部实现并联通；默认离线 `stub` 模式无需任何 API Key 即可现场演示完整流程。
-
+## 定义剧本的 YAML Schema ：
+```
+docs/yaml-schema-design.md
+```
+## 演示视频的链接：
+```
+https://www.bilibili.com/video/BV1UdEt6VEK3/?vd_source=ab27eb7c329d783d3a686c78e088a1b8
+```
 ## 亮点
 
 - **角色圣经 / 跨章一致性**：渐进实体消解，把「我 / 少爷 / 老爷」归并到同一角色 id，全篇引用不漂移。
@@ -99,14 +106,7 @@ export SCRIPTFORGE_LLM_API_KEY=sk-ant-xxx
 
 默认 `provider=stub`：离线规则桩，无 Key 也能跑通全流程。
 
-**DeepSeek 一键脚本**（key 不入库）：把 key 写进 `backend/.deepseek.key`（已 gitignore）或设环境变量 `DEEPSEEK_API_KEY`，然后在 `backend/` 下：
 
-```powershell
-# 先打包：JAVA_HOME="D:/JDK/jdk17" "D:/Maven/apache-maven-3.9.9/bin/mvn" -DskipTests package
-"sk-你的key" | Out-File -Encoding ascii backend\.deepseek.key   # 方式一：写入文件
-.\backend\run-deepseek.ps1        # 用 DeepSeek 启动 :8080（Windows）
-# Git Bash / WSL: bash backend/run-deepseek.sh
-```
 
 ## 测试
 
