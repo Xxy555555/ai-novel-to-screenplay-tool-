@@ -43,19 +43,27 @@ public class PipelineOrchestrator {
         this.llm = llm;
     }
 
+    /** 兼容重载：不带用户需求的端到端生成。 */
+    public Screenplay run(String novelText, String language, String title, String sourceTitle,
+                          PipelineListener listener) {
+        return run(novelText, language, title, sourceTitle, null, listener);
+    }
+
     /**
      * 端到端生成剧本。
      *
-     * @param novelText   小说全文（UTF-8）
-     * @param language    语言：{@code zh}/{@code en}/{@code auto}（auto 时按内容检测）
-     * @param title       剧本标题
-     * @param sourceTitle 原著信息（写入 meta）
-     * @param listener    进度监听（{@link PipelineListener#NOOP} 表示忽略）
+     * @param novelText        小说全文（UTF-8）
+     * @param language         语言：{@code zh}/{@code en}/{@code auto}（auto 时按内容检测）
+     * @param title            剧本标题
+     * @param sourceTitle      原著信息（写入 meta）
+     * @param userRequirements 用户上传时提出的改编需求（自由文本，可为空）；会注入理解层提示，
+     *                         并记录到 {@code meta.user_requirements} 以便溯源
+     * @param listener         进度监听（{@link PipelineListener#NOOP} 表示忽略）
      * @return 最终（保证尽力 Schema 合法、含质量报告）的剧本
      * @throws IllegalArgumentException 章节不足 3 章
      */
     public Screenplay run(String novelText, String language, String title, String sourceTitle,
-                          PipelineListener listener) {
+                          String userRequirements, PipelineListener listener) {
         // [0] 章节切分
         listener.stage("split", "running");
         listener.progress(2);
@@ -71,14 +79,18 @@ public class PipelineOrchestrator {
 
         // [A] 理解 + 角色圣经
         String lang = resolveLanguage(language, novelText);
+        String requirements = userRequirements == null ? "" : userRequirements.trim();
         StoryState state = new StoryState();
         listener.stage("analyze", "running");
+        if (!requirements.isBlank()) {
+            listener.log("ok", "已采纳用户改编需求：" + brief(requirements));
+        }
         List<ChapterFacts> facts = new ArrayList<>();
         int total = chapters.size();
         for (int i = 0; i < total; i++) {
             Chapter ch = chapters.get(i);
             listener.log("run", "第" + ch.index() + "章 → 理解中…");
-            facts.add(analyze.analyze(ch, state, lang, listener));
+            facts.add(analyze.analyze(ch, state, lang, listener, requirements));
             listener.progress(12 + (int) (40.0 * (i + 1) / total));
         }
         listener.log("ok", "角色圣经已建立 · 共 " + state.size() + " 个角色");
@@ -93,7 +105,8 @@ public class PipelineOrchestrator {
         listener.progress(82);
 
         // [C] 质检（校验 + 自动修复 + 评分）
-        Meta meta = new Meta(title, sourceTitle, null, lang, llm.describe());
+        Meta meta = new Meta(title, sourceTitle, null, lang, llm.describe(),
+                requirements.isBlank() ? null : requirements);
         Screenplay draft = new Screenplay(meta, state.snapshot(), scenes, null);
         AutoRepair.RepairOutcome ro = validate.validate(draft, listener);
         listener.progress(94);
@@ -104,6 +117,12 @@ public class PipelineOrchestrator {
                 + (report.schemaValid() ? "Schema 合法" : "仍有 " + report.schemaErrorCount() + " 处错误"));
         listener.progress(100);
         return result;
+    }
+
+    /** 截断长需求文本用于日志展示。 */
+    private static String brief(String s) {
+        String t = s.strip();
+        return t.length() > 40 ? t.substring(0, 40) + "…" : t;
     }
 
     private static String resolveLanguage(String language, String text) {
