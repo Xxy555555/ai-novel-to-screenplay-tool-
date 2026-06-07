@@ -68,8 +68,39 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <configuration>
-                    <argLine>-Dfile.encoding=UTF-8</argLine>
+                    <!-- @{argLine} 由 JaCoCo prepare-agent 注入覆盖率探针；保留 UTF-8。 -->
+                    <argLine>@{argLine} -Dfile.encoding=UTF-8</argLine>
                 </configuration>
+            </plugin>
+            <!-- 代码覆盖率：test 阶段产出 target/site/jacoco（html + jacoco.csv）。 -->
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <version>0.8.12</version>
+                <!--
+                  覆盖率数据文件指向 ASCII 的系统临时目录：本项目路径含非 ASCII（新建文件夹），
+                  传给 fork 出的测试 JVM 的 -javaagent destfile 会因编码而写入失败。报告 HTML/CSV
+                  仍输出到默认 target/site/jacoco。
+                -->
+                <configuration>
+                    <destFile>${java.io.tmpdir}/scriptforge-jacoco.exec</destFile>
+                    <dataFile>${java.io.tmpdir}/scriptforge-jacoco.exec</dataFile>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>prepare-agent</id>
+                        <goals>
+                            <goal>prepare-agent</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>report</id>
+                        <phase>test</phase>
+                        <goals>
+                            <goal>report</goal>
+                        </goals>
+                    </execution>
+                </executions>
             </plugin>
         </plugins>
     </build>

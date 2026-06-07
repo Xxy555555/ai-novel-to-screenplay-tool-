@@ -11,6 +11,8 @@
 - **Schema 驱动 + 自动修复**：JSON Schema 校验 → LLM 限次修复 → 规则兜底，保证输出 100% 合法 YAML。
 - **改编质量报告**：对白归属率、角色一致性、场景头完整率、演/说比、综合评分。
 - **可视化工作台**：三栏（大纲 / 卡片⇄YAML 双向同步 / 角色圣经 + 质量报告）+ Fountain 预览 + 导出。
+- **上传时提需求**：上传/选样本时可填「改编需求」（如「突出悬疑、多用画外音」），注入理解层并记入 `meta.user_requirements` 溯源。
+- **AI 多轮对话精修**：工作台内与 AI 对话直接改剧本（「把 S2 改得更紧张」「给主角加画外音」「改标题」「删/增场景」），自动 Schema 校验并双向同步到卡片/YAML；离线 stub 也能确定性演示。
 - **实时进度（SSE）**：章节切分 → 角色识别 → 别名归并 → 场景生成逐步可见。
 - **通用大模型适配器**：换 `(base-url + model + api-key)` 配置即切换任意模型，不绑定厂商。
 
@@ -71,11 +73,12 @@ npm run dev
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| POST | `/api/generate` | 建会话（`{sample_id 或 text, language, title}`，snake_case），返回 `session_id` |
+| POST | `/api/generate` | 建会话（`{sample_id 或 text, language, title, requirements}`，snake_case），返回 `session_id` |
 | GET | `/api/generate/{id}/stream` | SSE 流式生成（事件：stage/progress/log/character/alias/scene/complete/error） |
 | GET | `/api/screenplay/{id}` `{,/yaml,/fountain}` | 取最终剧本（JSON / YAML / Fountain 文本） |
 | GET | `/api/samples` | 内置示例列表 |
 | POST | `/api/validate` | 重校验当前 YAML，返回 `{valid, error_count, errors, report}` |
+| POST | `/api/chat` | AI 多轮对话精修：`{screenplay, message, history, language}` → `{reply, screenplay, changed, valid, error_count, errors}` |
 
 ## 切换大模型（不改代码）
 
@@ -104,6 +107,30 @@ export SCRIPTFORGE_LLM_API_KEY=sk-ant-xxx
 .\backend\run-deepseek.ps1        # 用 DeepSeek 启动 :8080（Windows）
 # Git Bash / WSL: bash backend/run-deepseek.sh
 ```
+
+## 测试
+
+端到端测试报告：[`docs/TEST-REPORT.md`](docs/TEST-REPORT.md)（由 `node scripts/gen-test-report.mjs` 聚合生成）。
+
+```bash
+# 后端：单元 + 集成 + HTTP 全栈 e2e + JaCoCo 覆盖率
+cd backend && JAVA_HOME="D:/JDK/jdk17" "D:/Maven/apache-maven-3.9.9/bin/mvn" test
+#   覆盖率 HTML：backend/target/site/jacoco/index.html
+
+# 前端：Vitest 组件/接口/store 测试 + v8 覆盖率
+cd frontend && npm run test          # 或 npm run test:coverage
+#   覆盖率 HTML：frontend/coverage/index.html
+
+# 浏览器端到端（Playwright，需前后端在跑）：见 e2e/README.md
+cd e2e && npm install && npx playwright install chromium && npm test
+
+# 生成聚合测试报告 → docs/TEST-REPORT.md
+node scripts/gen-test-report.mjs
+```
+
+三层覆盖：**后端** 20 用例（JUnit5/Spring Boot Test，含 `GenerationFlowIntegrationTest` HTTP 全栈 e2e）；
+**前端** 21 用例（Vitest + @vue/test-utils）；**浏览器** 1 条全流程（Playwright + gstack `/browse`）。
+测试全程用 `stub` 离线适配器，确定性、可进 CI、无需 API Key。
 
 ## 协作规范
 

@@ -1,0 +1,14 @@
+{
+  "name": "scriptforge-e2e",
+  "version": "1.0.0",
+  "private": true,
+  "description": "ScriptForge 浏览器端到端测试（Playwright）",
+  "type": "module",
+  "scripts": {
+    "test": "playwright test",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.1"
+  }
+}
