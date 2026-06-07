@@ -24,12 +24,15 @@
 | R3 | PR1：修复高度链断裂（`.wb` 改 `100dvh`），令三栏真正各自出现滚动条 | `feat/ui-01-scroll-home` | ✅ 已完成（Playwright e2e 先红后绿） |
 | R4 | PR3：真实模型鲁棒性 —— 回复不漏 Schema（`sanitizeReply`）+ 防截断（max-tokens 8192）+ 解析失败友好兜底，确保改动同步 | `feat/chat-03-concise-sync` | ✅ 已完成（TDD 先红后绿 + 真实模型实测） |
 | R5 | PR3：`OpenAiCompatibleClient` 容忍上游 `application/octet-stream` 响应（改按 byte[] 取响应再 UTF-8 解码） | `feat/chat-03-concise-sync` | ✅ 已完成（TDD 先红后绿 + 真实模型实测） |
+| R6 | PR3：全局改写类指令仍偶发「未能解析」——解析失败自动重试一次（追加纠正指令）+ `max-tokens` 8192→16384 防截断 | `feat/chat-03-concise-sync` | ✅ 已完成（TDD 先红后绿 + 真实模型实测） |
 
 > R1 走标准 TDD（PromptTemplatesTest 先加「元数据/metadata」禁令断言→红→补提示→绿）；R2 由既有组件用例覆盖（对话后 `.atag.mood` 更新）；R3 为纯 CSS，单测无法可靠断言（已实测 happy-dom 不计算 scoped 样式），以 `e2e/tests/scroll-and-home.spec.js` 真实浏览器先红（整页 scrollHeight 1051 > 视口 722）后绿验证。
 >
 > R4 复盘：评审在**真实 LLM**（agnes-2.0-flash）下仍见「回复含 Schema、改动不同步」。根因——模型未严格回吐 `{reply,screenplay}` 信封 / 输出被 4096 token 截断 → `RefineStage` 解析失败后把原始输出（含 Schema 转储）当回复返回、且剧本未变。修复：`RefineStage.sanitizeReply`（去围栏/截断到首个 `{` 前/限长）用于成功与失败两条路径，解析失败回友好提示而非原始输出；`max-tokens` 4096→8192（可经 `SCRIPTFORGE_LLM_MAX_TOKENS` 覆盖）防截断。TDD：RefineStageTest 先加「截断/含 Schema 输出不得进回复」「reply 内嵌 JSON 须剔除」两条失败用例→红→补 `sanitizeReply`→绿；并加 markdown 围栏信封回归用例。最后用真实模型实测：`把标题改为《群山回唱》` → 回复「已将剧本标题修改为《群山回唱》。」（16 字、无 Schema/围栏）、`changed=true`、标题已更新、可同步。
 >
 > R5 复盘：评审又见 `对话精修调用失败：…Error while extracting response for type [java.lang.String] and content type [application/octet-stream]`。根因——agnes 网关偶发把 JSON 响应头误标为 `application/octet-stream`，`OpenAiCompatibleClient` 用 `.body(String.class)` 找不到转换器即抛错、整个对话失败。修复：改 `.body(byte[].class)` 取原始字节再 UTF-8 解码（绕开 content-type 匹配）+ 显式 `Accept: application/json`；对正常 JSON 响应行为不变。TDD：`OpenAiCompatibleClientTest` 用 `MockRestServiceServer` 返回 octet-stream 的 JSON 体 → 先红（复现线上报错）→ 改 byte[] 后绿。真实模型实测：连发对话不再报该错，`给 S1 加一句画外音` → HTTP 200、回复 18 字无 Schema、`changed/valid=true`、新元素已进入同步后的剧本。
+>
+> R6 复盘：评审把「质量评测的修改建议」整段作为指令做**全局改写**，仍偶发 `未能解析本次返回的剧本改动`。真实模型诊断：8 场景改写 `finish_reason=stop`、约 7.6k 字符可正常解析（即当前构建已能处理），失败主因是 (1) 模型偶发不按 `{reply,screenplay}` 信封返回（散文/markdown），(2) 更大剧本输出被 token 上限截断。修复：`RefineStage` 抽出 `parseEnvelope`，首次解析不到剧本时**追加「只输出严格 JSON 信封」纠正指令自动重试一次**；`max-tokens` 8192→16384（已实测 agnes 接受、`finish_reason=stop`）。TDD：RefineStageTest 加「首次回散文、纠正后回合法信封→应重试并成功且恰好两次调用」用例→红→实现重试后绿。真实模型实测：8 场景全局改写 → HTTP 200、`changed/valid=true`、回复 59 字无 Schema、8 场景齐全。
 
 ---
 
