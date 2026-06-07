@@ -11,6 +11,10 @@ vi.mock('@/api/http', () => ({
   chatRefine: mockChatRefine,
   evaluateQuality: mockEvaluate,
 }))
+const { mockStreamChat } = vi.hoisted(() => ({ mockStreamChat: vi.fn() }))
+// 默认 streamChat 返回 undefined（未触发 onDone）→ sendChat 回退到 chatRefine；
+// 需要测试流式本身时用 mockStreamChat.mockImplementation 驱动 onToken/onDone。
+vi.mock('@/api/sse', () => ({ streamChat: mockStreamChat }))
 
 import WorkbenchView from './WorkbenchView.vue'
 import { useAppStore } from '@/stores/app'
@@ -57,7 +61,29 @@ describe('WorkbenchView —— AI 多轮对话精修（Feature 1b）', () => {
     mockPush.mockReset()
     mockChatRefine.mockReset()
     mockEvaluate.mockReset()
+    mockStreamChat.mockReset() // 默认返回 undefined → sendChat 回退到 chatRefine
     localStorage.clear()
+  })
+
+  it('流式对话：逐字显示回复，完成后出现 diff（Feature: streaming）', async () => {
+    const { w } = await mountWorkbench()
+    // 模拟流式：分块吐出信封原始文本（前端从中提取 reply），最后 onDone 给最终结果。
+    mockStreamChat.mockImplementation(async (_payload, h) => {
+      h.onToken('{"reply":"已把')
+      h.onToken(' S1 改得更紧张')
+      h.onToken('","screenplay":{}}')
+      h.onDone({ reply: '已把 S1 改得更紧张。', changed: true, valid: true, screenplay: sampleScreenplay('紧张') })
+    })
+    await w.findAll('.tabs button')[2].trigger('click')
+    await w.find('.chat-input textarea').setValue('把 S1 改得更紧张')
+    await w.find('.chat-input .send').trigger('click')
+    await flushPromises()
+
+    expect(mockStreamChat).toHaveBeenCalledTimes(1)
+    // 流式回复出现在对话区
+    expect(w.find('.tabpane.chat').text()).toContain('已把 S1 改得更紧张')
+    // 完成后进入 diff 待确认
+    expect(w.find('.diffpane').exists()).toBe(true)
   })
 
   it('AI 评测：点「开始评测」展示评分/评价/建议（Feature 4）', async () => {
@@ -82,6 +108,37 @@ describe('WorkbenchView —— AI 多轮对话精修（Feature 1b）', () => {
     expect(ae.text()).toContain('78')
     expect(ae.text()).toContain('改编较忠实于原著')
     expect(ae.text()).toContain('强化主角动机')
+  })
+
+  it('评测建议「采纳」→ 以该建议为指令精修并出现 diff（Feature: adopt）', async () => {
+    const { w, store } = await mountWorkbench()
+    store.sessionId = 'sess-1'
+    mockEvaluate.mockResolvedValue({
+      score: 70,
+      assessment: '可加强',
+      suggestions: ['强化主角动机', '精简冗长旁白'],
+      ai_evaluated: true,
+    })
+    mockChatRefine.mockResolvedValue({
+      reply: '已强化主角动机。',
+      changed: true,
+      valid: true,
+      screenplay: sampleScreenplay('紧张'),
+    })
+    await w.findAll('.tabs button')[1].trigger('click') // 质量页
+    await w.find('.ae-run').trigger('click')
+    await flushPromises()
+
+    const adoptBtns = w.findAll('.s-adopt')
+    expect(adoptBtns.length).toBe(2) // 每条建议一个采纳按钮
+    await adoptBtns[0].trigger('click')
+    await flushPromises()
+
+    // 以该建议为指令调用精修
+    expect(mockChatRefine).toHaveBeenCalled()
+    expect(mockChatRefine.mock.calls[0][0].message).toContain('强化主角动机')
+    // 走 diff 确认流程（不自动应用）
+    expect(w.find('.diffpane').exists()).toBe(true)
   })
 
   it('多线程历史：新建对话与原线程互不干扰、可切回（Feature 3）', async () => {

@@ -1,10 +1,13 @@
 package com.scriptforge.llm;
 
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Consumer;
 
 import org.springframework.http.MediaType;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
@@ -66,7 +69,11 @@ public class OpenAiCompatibleClient implements LlmClient {
 
     @Override
     public String chat(String systemPrompt, List<ChatMessage> history) {
-        // 原生多轮：system 在前，随后按序铺开对话历史（含本轮 user 指令）。
+        return chatCompletions(buildMessages(systemPrompt, history));
+    }
+
+    /** 原生多轮：system 在前，随后按序铺开对话历史（含本轮 user 指令）。 */
+    private List<Map<String, String>> buildMessages(String systemPrompt, List<ChatMessage> history) {
         List<Map<String, String>> messages = new ArrayList<>();
         if (systemPrompt != null && !systemPrompt.isBlank()) {
             messages.add(Map.of("role", "system", "content", systemPrompt));
@@ -77,7 +84,67 @@ public class OpenAiCompatibleClient implements LlmClient {
                 messages.add(Map.of("role", role, "content", m.content() == null ? "" : m.content()));
             }
         }
-        return chatCompletions(messages);
+        return messages;
+    }
+
+    @Override
+    public String chatStream(String systemPrompt, List<ChatMessage> messages, Consumer<String> onToken) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("model", props.getModel());
+        body.put("messages", buildMessages(systemPrompt, messages));
+        body.put("temperature", props.getTemperature());
+        body.put("max_tokens", props.getMaxTokens());
+        body.put("stream", true);
+
+        RuntimeException last = null;
+        for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+            StringBuilder full = new StringBuilder();
+            try {
+                http.post()
+                        .uri(props.getBaseUrl() + "/chat/completions")
+                        .header("Authorization", "Bearer " + props.getApiKey())
+                        .accept(MediaType.TEXT_EVENT_STREAM)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body(body)
+                        .exchange((request, response) -> {
+                            if (response.getStatusCode().isError()) {
+                                throw new RuntimeException("HTTP " + response.getStatusCode());
+                            }
+                            try (BufferedReader r = new BufferedReader(
+                                    new InputStreamReader(response.getBody(), StandardCharsets.UTF_8))) {
+                                String line;
+                                while ((line = r.readLine()) != null) {
+                                    String t = line.trim();
+                                    if (!t.startsWith("data:")) {
+                                        continue;
+                                    }
+                                    String data = t.substring(5).trim();
+                                    if (data.isEmpty() || "[DONE]".equals(data)) {
+                                        continue;
+                                    }
+                                    try {
+                                        JsonNode n = mapper.readTree(data);
+                                        String tok = n.path("choices").path(0).path("delta").path("content").asText("");
+                                        if (!tok.isEmpty()) {
+                                            full.append(tok);
+                                            if (onToken != null) {
+                                                onToken.accept(tok);
+                                            }
+                                        }
+                                    } catch (Exception ignore) {
+                                        // 跳过非 JSON 的 SSE 行
+                                    }
+                                }
+                            }
+                            return null;
+                        });
+                return full.toString();
+            } catch (Exception e) {
+                last = new RuntimeException("OpenAI 兼容端点流式调用失败（" + props.getBaseUrl() + "）：" + e.getMessage(), e);
+                log.warn("LLM 流式调用失败（第 {}/{} 次）：{}", attempt, MAX_ATTEMPTS, e.getMessage());
+            }
+        }
+        throw last;
     }
 
     private String chatCompletions(List<Map<String, String>> messages) {

@@ -1,6 +1,7 @@
 package com.scriptforge.llm;
 
 import java.util.List;
+import java.util.function.Consumer;
 
 /**
  * 通用大模型客户端接口 —— 整个适配层只暴露这一个抽象。
@@ -56,5 +57,24 @@ public interface LlmClient {
             }
         }
         return complete(systemPrompt, sb.toString());
+    }
+
+    /**
+     * 流式多轮补全 —— 供「对话精修流式回复」使用。每收到一段增量文本就回调
+     * {@code onToken}；返回拼接后的完整文本（与 {@link #chat} 等价）。
+     *
+     * <p>默认实现不真正流式：直接调用 {@link #chat} 拿到完整结果，整段回调一次再返回
+     * （stub / 未实现流式的客户端走此兜底）。{@code OpenAiCompatibleClient} 覆盖为
+     * 原生 {@code stream=true} 的逐 token 流式。
+     *
+     * @param onToken 增量文本回调（可能被调用 0..N 次）
+     * @return 完整文本
+     */
+    default String chatStream(String systemPrompt, List<ChatMessage> messages, Consumer<String> onToken) {
+        String full = chat(systemPrompt, messages);
+        if (onToken != null && full != null && !full.isEmpty()) {
+            onToken.accept(full);
+        }
+        return full;
     }
 }

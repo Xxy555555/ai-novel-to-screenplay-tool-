@@ -217,6 +217,17 @@ class RefineStageTest {
     }
 
     @Test
+    void refineStreamForwardsRawAndParsesScreenplay() {
+        String raw = "{\"reply\":\"已把标题改为群山回唱\",\"screenplay\":" + VALID_SP + "}";
+        StringBuilder streamed = new StringBuilder();
+        RefineStage.RefineResult r = refineReturning(raw)
+                .refineStream(baseScreenplay(), "把标题改为群山回唱", List.of(), "zh", streamed::append);
+        assertTrue(r.changed());
+        assertEquals("群山回唱", r.screenplay().meta().title());
+        assertTrue(streamed.length() > 0, "应转发过原始增量");
+    }
+
+    @Test
     void refineIsDeterministic() {
         RefineStage refine = newRefine();
         RefineStage.RefineResult a = refine.refine(baseScreenplay(), "把 S1 改得更紧张并加一句画外音", List.of(), "zh");

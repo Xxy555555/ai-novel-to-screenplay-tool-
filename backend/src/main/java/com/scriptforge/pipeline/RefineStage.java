@@ -116,9 +116,43 @@ public class RefineStage {
                 log.warn("对话精修重试调用失败：{}", e.getMessage());
             }
         }
+        return finalizeRefine(current, origJson, p);
+    }
+
+    /**
+     * 流式精修：边收 token 边经 {@code onRawToken} 转发原始增量（前端据此提取 reply 实时显示）；
+     * 拿到完整原始输出后与 {@link #refine} 走相同的解析→修复→评分→诚实回复。
+     */
+    public RefineResult refineStream(Screenplay current, String message, List<LlmClient.ChatMessage> history,
+                                     String language, java.util.function.Consumer<String> onRawToken) {
+        if (current == null) {
+            throw new IllegalArgumentException("缺少当前剧本，无法精修。");
+        }
+        String origJson = canon(current);
+        String sys = PromptTemplates.refineSystem(language);
+        List<LlmClient.ChatMessage> msgs = new ArrayList<>();
+        if (history != null) {
+            for (LlmClient.ChatMessage m : history) {
+                if (m != null && m.role() != null && m.content() != null) {
+                    msgs.add(m);
+                }
+            }
+        }
+        msgs.add(new LlmClient.ChatMessage("user", PromptTemplates.refineUser(origJson, message)));
+        String raw;
+        try {
+            raw = llm.chatStream(sys, msgs, onRawToken);
+        } catch (Exception e) {
+            log.warn("对话精修流式调用失败：{}", e.getMessage());
+            return unchanged(current, "对话精修调用失败：" + e.getMessage() + "（剧本未改动）。");
+        }
+        return finalizeRefine(current, origJson, parseEnvelope(raw));
+    }
+
+    /** 由解析结果产出最终精修结果（解析失败友好兜底 → AutoRepair → 评分 → 诚实回复）。 */
+    private RefineResult finalizeRefine(Screenplay current, String origJson, Parsed p) {
         String reply = p.reply();
         Screenplay refined = p.refined();
-
         if (refined == null) {
             // 解析不到剧本：绝不把原始输出（可能含 Schema/JSON 转储或被截断的内容）回灌给用户。
             String note = sanitizeReply(reply);
@@ -127,7 +161,6 @@ public class RefineStage {
             }
             return unchanged(current, note);
         }
-
         // 保证 Schema 合法（与生成主链路一致的兜底），再重新评分。
         AutoRepair.RepairOutcome ro = autoRepair.repair(refined, PipelineListener.NOOP);
         Screenplay repaired = ro.screenplay();
@@ -135,7 +168,6 @@ public class RefineStage {
         QualityReport report = quality.report(repaired, ro.errorCount());
         Screenplay withReport = new Screenplay(repaired.meta(), repaired.characters(), repaired.scenes(), report);
         List<String> errors = errorsOf(withReport);
-
         // 诚实性兜底：剧本无实际变化时，不沿用模型可能的「过度声称」，如实告知未做可见改动。
         String r;
         if (!changed) {
