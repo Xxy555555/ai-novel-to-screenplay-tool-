@@ -211,6 +211,11 @@ function aiSuggest(s) {
   toast('已为 ' + s.id + ' 生成镜头 / 情绪建议')
 }
 
+// 返回初始页面（首页）。
+function goHome() {
+  router.push('/')
+}
+
 // ───────── 联动 ─────────
 function selectScene(id) {
   selScene.value = id
@@ -421,6 +426,9 @@ function onDocClick(e) {
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16" /></svg>
       </button>
       <div class="brand"><span class="logo">◧</span>ScriptForge</div>
+      <button class="tb home-btn" @click="goHome" title="返回初始页面">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 11l9-8 9 8M5 10v10a1 1 0 001 1h3v-6h6v6h3a1 1 0 001-1V10" /></svg><span class="lbl">首页</span>
+      </button>
       <div class="proj"><b>{{ data.meta.title || '未命名剧本' }}</b> <span class="v">v1</span></div>
       <div class="spacer"></div>
 
@@ -706,7 +714,9 @@ function onDocClick(e) {
 </template>
 
 <style scoped>
-.wb { height: 100%; display: flex; flex-direction: column; overflow: hidden; }
+/* 用视口高度锚定，避免 n-config-provider 包裹层断掉 height:100% 链 —— 否则整页滚动、
+   三栏不各自滚动（dvh 处理移动端浏览器栏，回退 vh）。 */
+.wb { height: 100vh; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
 button { font: inherit; cursor: pointer; }
 
 /* ---------- top bar ---------- */
@@ -753,6 +763,44 @@ button { font: inherit; cursor: pointer; }
 .right { border-left: 1px solid var(--border); background: var(--surface); overflow: hidden; }
 .pane-h { padding: 13px 16px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-2); font-weight: 600; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px; position: sticky; top: 0; background: var(--surface); z-index: 5; }
 .pane-h .c { font-family: var(--mono); color: var(--muted); margin-left: auto; font-size: 11px; }
+
+/* 三栏可见纵向滚动条（暗色主题；右栏由内部面板各自滚动） */
+.pane,
+.char-list,
+.chat-msgs,
+.tabpane.qual,
+.script-page {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+.pane::-webkit-scrollbar,
+.char-list::-webkit-scrollbar,
+.chat-msgs::-webkit-scrollbar,
+.tabpane.qual::-webkit-scrollbar,
+.script-page::-webkit-scrollbar { width: 10px; height: 10px; }
+.pane::-webkit-scrollbar-track,
+.char-list::-webkit-scrollbar-track,
+.chat-msgs::-webkit-scrollbar-track,
+.tabpane.qual::-webkit-scrollbar-track,
+.script-page::-webkit-scrollbar-track { background: transparent; }
+.pane::-webkit-scrollbar-thumb,
+.char-list::-webkit-scrollbar-thumb,
+.chat-msgs::-webkit-scrollbar-thumb,
+.tabpane.qual::-webkit-scrollbar-thumb,
+.script-page::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+.pane::-webkit-scrollbar-thumb:hover,
+.char-list::-webkit-scrollbar-thumb:hover,
+.chat-msgs::-webkit-scrollbar-thumb:hover,
+.tabpane.qual::-webkit-scrollbar-thumb:hover,
+.script-page::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
+  background-clip: padding-box;
+}
 
 /* left outline */
 .outline { padding: 8px; }

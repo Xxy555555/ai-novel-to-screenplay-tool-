@@ -2,8 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 
-const { mockReplace } = vi.hoisted(() => ({ mockReplace: vi.fn() }))
-vi.mock('vue-router', () => ({ useRouter: () => ({ replace: mockReplace, push: vi.fn() }) }))
+const { mockReplace, mockPush } = vi.hoisted(() => ({ mockReplace: vi.fn(), mockPush: vi.fn() }))
+vi.mock('vue-router', () => ({ useRouter: () => ({ replace: mockReplace, push: mockPush }) }))
 const { mockChatRefine } = vi.hoisted(() => ({ mockChatRefine: vi.fn() }))
 vi.mock('@/api/http', () => ({
   fetchScreenplay: vi.fn(),
@@ -53,7 +53,16 @@ async function mountWorkbench() {
 describe('WorkbenchView —— AI 多轮对话精修（Feature 1b）', () => {
   beforeEach(() => {
     mockReplace.mockReset()
+    mockPush.mockReset()
     mockChatRefine.mockReset()
+  })
+
+  it('「返回首页」按钮跳转到 /（Feature 1b）', async () => {
+    const { w } = await mountWorkbench()
+    const home = w.find('.home-btn')
+    expect(home.exists()).toBe(true)
+    await home.trigger('click')
+    expect(mockPush).toHaveBeenCalledWith('/')
   })
 
   it('渲染「AI 对话」标签，并显示回显用户需求的开场白', async () => {
