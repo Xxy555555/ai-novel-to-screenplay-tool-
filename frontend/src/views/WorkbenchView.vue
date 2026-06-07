@@ -714,7 +714,9 @@ function onDocClick(e) {
 </template>
 
 <style scoped>
-.wb { height: 100%; display: flex; flex-direction: column; overflow: hidden; }
+/* 用视口高度锚定，避免 n-config-provider 包裹层断掉 height:100% 链 —— 否则整页滚动、
+   三栏不各自滚动（dvh 处理移动端浏览器栏，回退 vh）。 */
+.wb { height: 100vh; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
 button { font: inherit; cursor: pointer; }
 
 /* ---------- top bar ---------- */
