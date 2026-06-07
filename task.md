@@ -19,11 +19,11 @@
 
 | # | 修订项 | 分支 | 状态 |
 | --- | --- | --- | --- |
-| R1 | PR3：AI 回复禁止复述元数据（标题/语言/id/JSON 字段名等），只说改动位置 | `feat/chat-03-concise-sync` | ⬜ 待开始 |
-| R2 | PR3：复核并断言「对话改动后卡片即时同步」 | `feat/chat-03-concise-sync` | ⬜ 待开始 |
-| R3 | PR1：修复高度链断裂（`.wb` 改 `100dvh`），令三栏真正各自出现滚动条 | `feat/ui-01-scroll-home` | ⬜ 待开始 |
+| R1 | PR3：AI 回复禁止复述元数据（标题/语言/id/JSON 字段名等），只说改动位置 | `feat/chat-03-concise-sync` | ✅ 已完成（TDD 先红后绿） |
+| R2 | PR3：复核并断言「对话改动后卡片即时同步」 | `feat/chat-03-concise-sync` | ✅ 已覆盖（既有用例：卡片情绪随对话更新） |
+| R3 | PR1：修复高度链断裂（`.wb` 改 `100dvh`），令三栏真正各自出现滚动条 | `feat/ui-01-scroll-home` | ✅ 已完成（Playwright e2e 先红后绿） |
 
-> R1/R2 走标准 TDD（先红后绿）；R3 为纯 CSS，单测无法可靠断言，以 Playwright e2e（每栏 `scrollHeight>clientHeight` 且互不联动）+ build + 目检验证。
+> R1 走标准 TDD（PromptTemplatesTest 先加「元数据/metadata」禁令断言→红→补提示→绿）；R2 由既有组件用例覆盖（对话后 `.atag.mood` 更新）；R3 为纯 CSS，单测无法可靠断言（已实测 happy-dom 不计算 scoped 样式），以 `e2e/tests/scroll-and-home.spec.js` 真实浏览器先红（整页 scrollHeight 1051 > 视口 722）后绿验证。
 
 ---
 
