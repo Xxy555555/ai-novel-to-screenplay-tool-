@@ -136,9 +136,14 @@ public class RefineStage {
         Screenplay withReport = new Screenplay(repaired.meta(), repaired.characters(), repaired.scenes(), report);
         List<String> errors = errorsOf(withReport);
 
-        String note = sanitizeReply(reply);
-        String r = note != null && !note.isBlank() ? note
-                : (changed ? "已根据你的指令更新剧本。" : "剧本未发生变化。");
+        // 诚实性兜底：剧本无实际变化时，不沿用模型可能的「过度声称」，如实告知未做可见改动。
+        String r;
+        if (!changed) {
+            r = "本次未改动剧本的可见内容（可能已符合要求；如需修改，请换一种更具体的说法）。";
+        } else {
+            String note = sanitizeReply(reply);
+            r = note != null && !note.isBlank() ? note : "已根据你的指令更新剧本。";
+        }
         return new RefineResult(r, withReport, changed, ro.errorCount(), errors);
     }
 

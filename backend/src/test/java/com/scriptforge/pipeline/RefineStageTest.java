@@ -5,6 +5,9 @@ import java.util.Optional;
 
 import org.junit.jupiter.api.Test;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.PropertyNamingStrategies;
 import com.scriptforge.llm.LlmClient;
 import com.scriptforge.llm.LlmProperties;
 import com.scriptforge.llm.StubLlmClient;
@@ -197,6 +200,20 @@ class RefineStageTest {
         assertTrue(r.changed());
         assertEquals("群山回唱", r.screenplay().meta().title());
         assertEquals("已把标题改为群山回唱", r.reply());
+    }
+
+    @Test
+    void noVisibleChangeReplyIsHonestEvenIfModelOverclaims() throws Exception {
+        // 模型返回与输入完全相同的剧本（无实际改动），却在 reply 里声称改了 —— 回复必须如实告知未改动。
+        ObjectMapper m = new ObjectMapper()
+                .setPropertyNamingStrategy(PropertyNamingStrategies.SNAKE_CASE)
+                .setSerializationInclusion(JsonInclude.Include.NON_EMPTY);
+        String spJson = m.writeValueAsString(baseScreenplay());
+        String raw = "{\"reply\":\"已把场景大纲和角色圣经都改成中文了\",\"screenplay\":" + spJson + "}";
+        RefineStage.RefineResult r = refineReturning(raw).refine(baseScreenplay(), "场景大纲和角色圣经使用中文", List.of(), "zh");
+        assertFalse(r.changed(), "剧本无实际变化");
+        assertFalse(r.reply().contains("已把场景大纲"), "不应沿用模型对未发生改动的过度声称");
+        assertTrue(r.reply().contains("未改动") || r.reply().contains("没有"), "应如实告知未做可见改动");
     }
 
     @Test
