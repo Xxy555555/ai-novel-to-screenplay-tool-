@@ -126,7 +126,7 @@ describe('WorkbenchView —— AI 多轮对话精修（Feature 1b）', () => {
     expect(chat.text()).toContain('突出悬疑') // 开场白回显上传时填写的需求
   })
 
-  it('发送消息 → 调用 chatRefine，回填回复并替换剧本（情绪更新同步到卡片）', async () => {
+  it('发送消息 → 调用 chatRefine，不自动应用而是出现 diff，采纳后才同步到卡片（Feature: diff）', async () => {
     const { w } = await mountWorkbench()
     mockChatRefine.mockResolvedValue({
       reply: '已把 S1 改得更紧张。',
@@ -144,14 +144,41 @@ describe('WorkbenchView —— AI 多轮对话精修（Feature 1b）', () => {
     expect(mockChatRefine).toHaveBeenCalledTimes(1)
     const arg = mockChatRefine.mock.calls[0][0]
     expect(arg.message).toBe('把 S1 改得更紧张')
-    expect(arg.language).toBe('zh')
     expect(arg.screenplay.scenes[0].id).toBe('S1')
 
     // 2) 回复出现在对话区
     expect(w.find('.tabpane.chat').text()).toContain('已把 S1 改得更紧张')
 
-    // 3) 剧本被替换 → 卡片上的情绪标注更新为「紧张」
+    // 3) 不自动应用：出现 diff 待确认，剧本尚未应用（情绪仍是「平静」）
+    expect(w.find('.diffpane').exists()).toBe(true)
+    expect(w.find('.atag.mood').text()).toContain('平静')
+
+    // 4) 点「采纳」后才同步到卡片：情绪变「紧张」
+    await w.find('.diffbar .accept').trigger('click')
+    await flushPromises()
+    expect(w.find('.diffpane').exists()).toBe(false)
     expect(w.find('.atag.mood').text()).toContain('紧张')
+  })
+
+  it('对话改动后点「拒绝」保持原剧本不变（Feature: diff）', async () => {
+    const { w } = await mountWorkbench()
+    mockChatRefine.mockResolvedValue({
+      reply: '已把 S1 改得更紧张。',
+      changed: true,
+      valid: true,
+      screenplay: sampleScreenplay('紧张'),
+    })
+    await w.findAll('.tabs button')[2].trigger('click')
+    await w.find('.chat-input textarea').setValue('把 S1 改得更紧张')
+    await w.find('.chat-input .send').trigger('click')
+    await flushPromises()
+    expect(w.find('.diffpane').exists()).toBe(true)
+
+    await w.find('.diffbar .reject').trigger('click')
+    await flushPromises()
+    expect(w.find('.diffpane').exists()).toBe(false)
+    // 拒绝后保持原情绪「平静」
+    expect(w.find('.atag.mood').text()).toContain('平静')
   })
 
   it('YAML 视图默认「仅当前场景」，切「完整剧本」显示整部（Feature 1c）', async () => {

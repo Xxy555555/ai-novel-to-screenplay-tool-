@@ -5,6 +5,7 @@ import jsyaml from 'js-yaml'
 import { useAppStore } from '@/stores/app'
 import { useChatStore } from '@/stores/chat'
 import { fetchScreenplay, validateYaml, chatRefine, evaluateQuality } from '@/api/http'
+import { diffScreenplay } from '@/utils/screenplayDiff'
 
 const router = useRouter()
 const store = useAppStore()
@@ -40,6 +41,10 @@ const threadsOpen = ref(false) // 历史线程列表展开
 // ───────── AI 质量评测 ─────────
 const evalBusy = ref(false)
 const evalResult = ref(null) // { score, assessment, suggestions, ai_evaluated }
+
+// ───────── 对话改动待确认（内容级 diff，类似 Cursor）─────────
+const pendingScreenplay = ref(null) // AI 返回但尚未应用的剧本
+const pendingDiff = ref(null)       // diffScreenplay(当前, pending) 结果
 
 // ───────── 载入 ─────────
 onMounted(async () => {
@@ -349,9 +354,7 @@ async function sendChat() {
     })
     chat.appendMessage('assistant', resp.reply || '（无回复）')
     if (resp.changed && resp.screenplay) {
-      applyRefined(resp.screenplay)
-      setValid(resp.valid !== false)
-      toast('AI 已更新剧本' + (resp.valid === false ? '（仍有校验问题）' : ' · 已同步到卡片/YAML'))
+      proposeRefined(resp.screenplay) // 不自动应用：先生成 diff 待用户采纳/拒绝
     } else {
       toast('AI 未对剧本做改动')
     }
@@ -392,12 +395,73 @@ async function runEval() {
   }
 }
 
+// 提议改动：计算内容级 diff，进入「待确认」态（不立即应用）。
+function proposeRefined(sp) {
+  const normed = normalize(sp)
+  const diff = diffScreenplay(plainScreenplay(), normed)
+  if (!diff.changed) {
+    toast('AI 未对剧本做可见改动')
+    return
+  }
+  pendingScreenplay.value = normed
+  pendingDiff.value = diff
+  // 切到卡片视图以展示 diff；定位到首个有改动的场景。
+  if (viewMode.value === 'yaml') viewMode.value = 'cards'
+  const firstChanged = diff.scenes.find((s) => s.op !== 'same')
+  if (firstChanged && data.value.scenes.find((s) => s.id === firstChanged.id)) selScene.value = firstChanged.id
+  toast('AI 提议改动 · 请在卡片上确认采纳或拒绝')
+  chatScrollToBottom()
+}
+// 采纳：应用待确认剧本并同步 YAML。
+function acceptPending() {
+  if (!pendingScreenplay.value) return
+  applyRefined(pendingScreenplay.value)
+  clearPending()
+  setValid(true)
+  chat.appendMessage('assistant', '✅ 已采纳本次改动，并同步到卡片/YAML。')
+  toast('已采纳改动 · 已同步到卡片/YAML')
+  chatScrollToBottom()
+}
+// 拒绝：丢弃待确认，保留当前剧本。
+function rejectPending() {
+  clearPending()
+  chat.appendMessage('assistant', '↩️ 已拒绝本次改动，剧本保持不变。')
+  toast('已拒绝改动 · 剧本未变')
+  chatScrollToBottom()
+}
+function clearPending() {
+  pendingScreenplay.value = null
+  pendingDiff.value = null
+}
+
 // 用 AI 返回的剧本替换工作区，并保持选中场景与视图同步。
 function applyRefined(sp) {
   const keep = selScene.value
   data.value = reactive(normalize(sp))
   selScene.value = data.value.scenes.find((s) => s.id === keep)?.id || data.value.scenes[0]?.id || ''
   if (viewMode.value === 'yaml') syncYamlFromModel()
+}
+
+// 仅渲染有改动的场景（diff 视图）。
+const changedScenes = computed(() => (pendingDiff.value?.scenes || []).filter((s) => s.op !== 'same'))
+function opLabel(op) {
+  return op === 'added' ? '新增场景' : op === 'removed' ? '删除场景' : '改动'
+}
+const META_LABEL = { title: '标题', source_title: '来源', author: '作者', language: '语言', user_requirements: '改编需求' }
+const FIELD_LABEL = {
+  mood: '情绪', pacing: '节奏', shots: '分镜', present_characters: '在场角色', source: '原文', chapter: '章节',
+  'heading.int_ext': '内外景', 'heading.location': '地点', 'heading.time_of_day': '时间',
+  name: '名字', role: '角色', tone: '口吻', aliases: '别名', relations: '关系', first_appearance: '首次登场',
+}
+function metaLabel(f) {
+  return META_LABEL[f] || f
+}
+function fieldLabel(f) {
+  return FIELD_LABEL[f] || f
+}
+function fmtVal(v) {
+  if (v == null || v === '') return '（空）'
+  return Array.isArray(v) ? v.join('、') || '（空）' : String(v)
 }
 
 // ───────── Fountain 预览（客户端渲染，反映当前编辑） ─────────
@@ -620,8 +684,43 @@ function onDocClick(e) {
           <div class="hint">改任一侧 <span class="k">卡片</span> ⇆ <span class="k">YAML</span> 即时双向同步</div>
         </div>
 
+        <!-- DIFF：对话改动待确认（采纳前不应用） -->
+        <div class="diffpane" v-if="pendingDiff">
+          <div class="diffbar">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3v12M6 21a3 3 0 100-6 3 3 0 000 6zM6 9a3 3 0 100-6 3 3 0 000 6zM18 9a3 3 0 100-6 3 3 0 000 6zM18 9v3a3 3 0 01-3 3H9" /></svg>
+            <span class="dsum">AI 提议改动 · {{ pendingDiff.summary }}</span>
+            <span class="sp"></span>
+            <button class="accept" @click="acceptPending">✓ 采纳</button>
+            <button class="reject" @click="rejectPending">✕ 拒绝</button>
+          </div>
+          <div class="dmeta" v-if="pendingDiff.meta.length || pendingDiff.characters.added.length || pendingDiff.characters.removed.length || pendingDiff.characters.changed.length">
+            <div v-for="m in pendingDiff.meta" :key="m.field" class="dmrow"><b>{{ metaLabel(m.field) }}</b>：<span class="old">{{ fmtVal(m.before) }}</span> → <span class="new">{{ fmtVal(m.after) }}</span></div>
+            <div v-for="c in pendingDiff.characters.added" :key="'ca' + c.id" class="dmrow add">＋ 新增角色：{{ c.name }}</div>
+            <div v-for="c in pendingDiff.characters.removed" :key="'cr' + c.id" class="dmrow del">－ 删除角色：{{ c.name }}</div>
+            <div v-for="c in pendingDiff.characters.changed" :key="'cc' + c.id" class="dmrow">角色「{{ c.name }}」：{{ c.fields.map((f) => fieldLabel(f.field)).join('、') }} 有改动</div>
+          </div>
+          <div class="dscene" v-for="s in changedScenes" :key="s.id" :class="s.op">
+            <div class="ds-head">
+              <span class="op-badge" :class="s.op">{{ opLabel(s.op) }}</span>
+              <span class="sid">{{ s.id }}</span>
+              <b>{{ (s.scene.heading && s.scene.heading.location) || '未命名' }}</b> · {{ (s.scene.heading && s.scene.heading.time_of_day) || '—' }}
+            </div>
+            <div class="ds-fields" v-if="s.fields && s.fields.length">
+              <span v-for="f in s.fields" :key="f.field" class="dchip">{{ fieldLabel(f.field) }}：{{ fmtVal(f.before) }} → {{ fmtVal(f.after) }}</span>
+            </div>
+            <div class="ds-els">
+              <div v-for="(e, i) in s.elements" :key="i" class="delrow" :class="e.op">
+                <span class="mark">{{ e.op === 'add' ? '＋' : e.op === 'del' ? '－' : '' }}</span>
+                <span class="etype">{{ TYPE_LABEL[e.element.type] || e.element.type }}</span>
+                <span v-if="isSpoken(e.element)" class="who">{{ charName(e.element.character) }}：</span>
+                <span class="etxt">{{ e.element.line || e.element.text }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <!-- CARDS：只渲染当前选中场景 -->
-        <div class="cards" v-show="viewMode === 'cards'" v-if="curScene">
+        <div class="cards" v-show="viewMode === 'cards' && !pendingDiff" v-if="curScene">
           <div class="scard" :class="{ warn: sceneWarn(curScene), sel: true }" :id="'card-' + curScene.id">
             <div class="sc-head">
               <span class="sidtag">{{ curScene.id }}</span>
@@ -683,7 +782,7 @@ function onDocClick(e) {
         </div>
 
         <!-- YAML -->
-        <div class="yaml-wrap" v-show="viewMode === 'yaml'">
+        <div class="yaml-wrap" v-show="viewMode === 'yaml' && !pendingDiff">
           <div class="yaml-bar">
             <div class="yscope" role="group" aria-label="YAML 显示范围">
               <button :class="{ on: yamlScope === 'scene' }" @click="setYamlScope('scene')">当前场景<span v-if="curScene" class="sc">{{ curScene.id }}</span></button>
@@ -967,6 +1066,47 @@ button { font: inherit; cursor: pointer; }
 
 /* scene cards */
 .cards { padding: 18px; display: flex; flex-direction: column; gap: 18px; }
+
+/* 对话改动 diff（待确认） */
+.diffpane { padding: 16px 18px; display: flex; flex-direction: column; gap: 14px; }
+.diffbar { position: sticky; top: 0; z-index: 4; display: flex; align-items: center; gap: 9px; padding: 10px 12px; background: var(--accent-soft); border: 1px solid rgba(232, 179, 73, 0.35); border-radius: 9px; font-size: 13px; color: var(--text); }
+.diffbar svg { width: 15px; height: 15px; color: var(--accent); flex: none; }
+.diffbar .dsum { font-weight: 600; }
+.diffbar .sp { flex: 1; }
+.diffbar .accept { background: var(--success); color: #0e1116; border: none; border-radius: 7px; padding: 6px 14px; font-size: 13px; font-weight: 600; }
+.diffbar .reject { background: var(--raised); color: var(--danger); border: 1px solid var(--border); border-radius: 7px; padding: 6px 14px; font-size: 13px; }
+.diffbar .accept:hover { filter: brightness(1.08); }
+.diffbar .reject:hover { border-color: var(--danger); }
+.dmeta { display: flex; flex-direction: column; gap: 5px; font-size: 13px; color: var(--text-2); background: var(--surface); border: 1px solid var(--border); border-radius: 9px; padding: 10px 13px; }
+.dmeta .dmrow b { color: var(--text); }
+.dmeta .old { color: var(--danger); text-decoration: line-through; }
+.dmeta .new { color: var(--success); }
+.dmeta .dmrow.add { color: var(--success); }
+.dmeta .dmrow.del { color: var(--danger); }
+.dscene { background: var(--surface); border: 1px solid var(--border); border-radius: 11px; overflow: hidden; }
+.dscene.added { border-color: rgba(63, 185, 80, 0.4); }
+.dscene.removed { border-color: rgba(248, 81, 73, 0.4); }
+.ds-head { display: flex; align-items: center; gap: 9px; padding: 11px 14px; border-bottom: 1px solid var(--border); font-size: 13px; }
+.ds-head .sid { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+.ds-head b { color: var(--text); }
+.op-badge { font-size: 11px; border-radius: 5px; padding: 2px 8px; }
+.op-badge.changed { color: var(--accent); background: var(--accent-soft); border: 1px solid rgba(232, 179, 73, 0.3); }
+.op-badge.added { color: var(--success); background: rgba(63, 185, 80, 0.1); border: 1px solid rgba(63, 185, 80, 0.3); }
+.op-badge.removed { color: var(--danger); background: rgba(248, 81, 73, 0.1); border: 1px solid rgba(248, 81, 73, 0.3); }
+.ds-fields { display: flex; flex-wrap: wrap; gap: 6px; padding: 9px 14px 0; }
+.ds-fields .dchip { font-size: 12px; color: var(--text-2); background: var(--inset); border: 1px solid var(--border); border-radius: 5px; padding: 2px 8px; }
+.ds-els { padding: 8px 14px 12px; display: flex; flex-direction: column; gap: 3px; }
+.delrow { display: flex; gap: 7px; font-size: 13px; line-height: 1.6; padding: 2px 6px; border-radius: 5px; align-items: baseline; }
+.delrow .mark { width: 12px; flex: none; font-family: var(--mono); }
+.delrow .etype { font-size: 10px; font-family: var(--mono); color: var(--muted); flex: none; text-transform: uppercase; }
+.delrow .who { font-weight: 600; color: var(--text); }
+.delrow .etxt { color: var(--text); min-width: 0; }
+.delrow.same { color: var(--text-2); opacity: 0.75; }
+.delrow.same .etxt { color: var(--text-2); }
+.delrow.add { background: rgba(63, 185, 80, 0.1); }
+.delrow.add .mark, .delrow.add .etxt { color: var(--success); }
+.delrow.del { background: rgba(248, 81, 73, 0.09); }
+.delrow.del .mark, .delrow.del .etxt { color: var(--danger); text-decoration: line-through; }
 .scard { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; scroll-margin-top: 70px; box-shadow: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 8px 24px rgba(0, 0, 0, 0.32); }
 .scard.sel { border-color: var(--border-strong); }
 .scard.warn { border-color: rgba(210, 153, 34, 0.4); }
