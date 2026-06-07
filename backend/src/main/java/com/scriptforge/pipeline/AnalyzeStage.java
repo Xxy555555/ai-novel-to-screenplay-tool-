@@ -9,8 +9,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
+import com.fasterxml.jackson.core.json.JsonReadFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.scriptforge.llm.LlmClient;
 import com.scriptforge.llm.PromptTemplates;
 import com.scriptforge.model.Beat;
@@ -36,7 +38,17 @@ public class AnalyzeStage {
     private static final Logger log = LoggerFactory.getLogger(AnalyzeStage.class);
 
     private final LlmClient llm;
-    private final ObjectMapper mapper = new ObjectMapper();
+
+    /**
+     * 解析 LLM 返回 JSON 的容错读取器：允许「反斜杠转义任意字符」。
+     *
+     * <p>动机：小说正文常含防盗版水印（如「百~万\小!说」中的杂散反斜杠），模型会原样抄入
+     * JSON 文本值。严格 JSON 视 {@code \小} 为非法转义会导致整章解析失败而塌缩为兜底单块，
+     * 丢失全部对白/动作。开启该特性后 {@code \X} 按字面取 {@code X}，杂散反斜杠不再使整章丢失。
+     */
+    private final ObjectMapper mapper = JsonMapper.builder()
+            .enable(JsonReadFeature.ALLOW_BACKSLASH_ESCAPING_ANY_CHARACTER)
+            .build();
 
     public AnalyzeStage(LlmClient llm) {
         this.llm = llm;
