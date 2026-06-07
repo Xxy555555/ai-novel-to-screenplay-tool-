@@ -113,6 +113,46 @@ public final class PromptTemplates {
                 + "严格按以下形状输出 JSON：\n" + schema;
     }
 
+    // ───────────────────────── 对话精修（多轮） ─────────────────────────
+
+    /** 标记：用户消息中「当前剧本 JSON」分隔符。stub 据此识别为精修请求并解析剧本。 */
+    public static final String REFINE_SCREENPLAY_MARKER = "【当前剧本 JSON】";
+    /** 标记：用户消息中「用户指令」分隔符。 */
+    public static final String REFINE_INSTRUCTION_MARKER = "【用户指令】";
+
+    /**
+     * 对话精修系统提示：把模型定位为「按指令改写整本剧本并只回 JSON 信封」的编辑助手。
+     * 输出契约：{@code {"reply": "对所做修改的简要说明", "screenplay": <完整剧本对象>}}。
+     */
+    public static String refineSystem(String language) {
+        boolean en = "en".equalsIgnoreCase(language);
+        if (en) {
+            return "You are a screenplay editing assistant. Given the CURRENT screenplay and the user's "
+                    + "instruction, return the FULL modified screenplay. Preserve scenes/characters the user "
+                    + "did not mention. Keep the same JSON structure (meta / characters / scenes / report) and the "
+                    + "same id scheme (characters C1.., scenes S1.., character references by id). Output STRICT JSON "
+                    + "ONLY in this exact shape, no markdown, no prose:\n"
+                    + "{ \"reply\": \"<short note describing what you changed>\", \"screenplay\": { ...full screenplay... } }";
+        }
+        return "你是剧本精修助手。给定「当前剧本」与「用户指令」，请返回修改后的<strong>完整剧本</strong>，"
+                + "保留用户未提及的场景/角色，沿用相同结构（meta / characters / scenes / report）与 id 体系"
+                + "（角色 C1.. 场景 S1.. 对白以角色 id 引用）。只输出严格合法的 JSON（不要 markdown、不要解释），"
+                + "且必须是以下信封形状：\n"
+                + "{ \"reply\": \"<对所做修改的简要中文说明>\", \"screenplay\": { …完整剧本… } }";
+    }
+
+    /**
+     * 对话精修用户提示：内嵌当前剧本 JSON 与用户指令（用固定标记包裹，便于 stub 离线解析）。
+     *
+     * @param screenplayJson 当前剧本的 JSON 字符串（snake_case）
+     * @param instruction    本轮用户指令
+     */
+    public static String refineUser(String screenplayJson, String instruction) {
+        return REFINE_SCREENPLAY_MARKER + "\n" + screenplayJson + "\n\n"
+                + REFINE_INSTRUCTION_MARKER + "\n" + (instruction == null ? "" : instruction.trim()) + "\n\n"
+                + "请按系统要求只返回 JSON 信封：{ \"reply\": \"…\", \"screenplay\": { … } }";
+    }
+
     /**
      * 修复提示：把 Schema 校验错误连同不合法输出回喂模型，要求只返回修正后的 YAML/JSON。
      * 供 {@code AutoRepair} 使用。

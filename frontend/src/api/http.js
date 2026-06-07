@@ -28,6 +28,19 @@ export function createSession({ sampleId, text, language, title, requirements } 
     .then((r) => r.data.session_id)
 }
 
+/**
+ * 多轮对话精修：把当前剧本 + 本轮消息 + 历史发给后端，返回
+ * { reply, screenplay, changed, valid, error_count, errors }。
+ * @param {object} p
+ * @param {object} p.screenplay 当前工作区剧本（snake_case 对象）
+ * @param {string} p.message    本轮用户消息
+ * @param {Array<{role:string,content:string}>} [p.history] 历史（不含本轮）
+ * @param {string} [p.language] 语言
+ */
+export function chatRefine({ screenplay, message, history, language } = {}) {
+  return http.post('/chat', { screenplay, message, history, language }).then((r) => r.data)
+}
+
 /** SSE 流地址（交给 EventSource / openGeneration 使用，走 Vite 代理）。 */
 export function streamUrl(sessionId) {
   return `/api/generate/${sessionId}/stream`

@@ -44,7 +44,26 @@ public class OpenAiCompatibleClient implements LlmClient {
             messages.add(Map.of("role", "system", "content", systemPrompt));
         }
         messages.add(Map.of("role", "user", "content", userPrompt == null ? "" : userPrompt));
+        return chatCompletions(messages);
+    }
 
+    @Override
+    public String chat(String systemPrompt, List<ChatMessage> history) {
+        // 原生多轮：system 在前，随后按序铺开对话历史（含本轮 user 指令）。
+        List<Map<String, String>> messages = new ArrayList<>();
+        if (systemPrompt != null && !systemPrompt.isBlank()) {
+            messages.add(Map.of("role", "system", "content", systemPrompt));
+        }
+        if (history != null) {
+            for (ChatMessage m : history) {
+                String role = m.role() == null ? "user" : m.role();
+                messages.add(Map.of("role", role, "content", m.content() == null ? "" : m.content()));
+            }
+        }
+        return chatCompletions(messages);
+    }
+
+    private String chatCompletions(List<Map<String, String>> messages) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("model", props.getModel());
         body.put("messages", messages);
