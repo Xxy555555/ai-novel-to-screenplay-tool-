@@ -50,17 +50,24 @@ public final class PromptTemplates {
                 + "并且只输出严格合法的 JSON（不要 markdown、不要解释、不要代码围栏）。不要编造原文没有的事实。";
     }
 
-    /**
-     * 用户提示：拼接章节正文、已知角色圣经快照与输出格式要求。
-     *
-     * @param chapterIndex   章节序号
-     * @param chapterTitle   章节标题
-     * @param chapterContent 章节正文
-     * @param bible          当前角色圣经快照（供跨章一致性：沿用既有角色 id / 名）
-     * @param language       语言（影响提示语言）
-     */
+    /** 兼容重载：不带用户需求的理解层提示。 */
     public static String analyzeUser(int chapterIndex, String chapterTitle, String chapterContent,
                                      List<Character> bible, String language) {
+        return analyzeUser(chapterIndex, chapterTitle, chapterContent, bible, language, null);
+    }
+
+    /**
+     * 用户提示：拼接章节正文、已知角色圣经快照、（可选）用户改编需求与输出格式要求。
+     *
+     * @param chapterIndex     章节序号
+     * @param chapterTitle     章节标题
+     * @param chapterContent   章节正文
+     * @param bible            当前角色圣经快照（供跨章一致性：沿用既有角色 id / 名）
+     * @param language         语言（影响提示语言）
+     * @param userRequirements 用户上传时提出的改编需求（自由文本，可为空/{@code null}）
+     */
+    public static String analyzeUser(int chapterIndex, String chapterTitle, String chapterContent,
+                                     List<Character> bible, String language, String userRequirements) {
         boolean en = "en".equalsIgnoreCase(language);
         StringBuilder known = new StringBuilder();
         if (bible != null && !bible.isEmpty()) {
@@ -72,6 +79,11 @@ public final class PromptTemplates {
                 known.append('\n');
             }
         }
+        boolean hasReq = userRequirements != null && !userRequirements.isBlank();
+        String reqBlock = !hasReq ? ""
+                : (en ? "\nUser adaptation requirements (honor them while staying faithful to the text):\n"
+                        + userRequirements.trim() + "\n"
+                      : "\n用户改编需求（在忠于原文的前提下尽量满足）：\n" + userRequirements.trim() + "\n");
         String schema = """
                 {
                   "characters": [ { "name": "", "aliases": [], "role": "", "tone": "",
@@ -84,6 +96,7 @@ public final class PromptTemplates {
         if (en) {
             return "Known characters (reuse the same names for the same person across chapters):\n"
                     + (known.length() == 0 ? "(none yet)\n" : known)
+                    + reqBlock
                     + "\nChapter " + chapterIndex + " — " + chapterTitle + ":\n\"\"\"\n"
                     + chapterContent + "\n\"\"\"\n\n"
                     + "Split this chapter into scenes (by time + place + present characters), and for each scene "
@@ -92,6 +105,7 @@ public final class PromptTemplates {
         }
         return "已知角色（同一人在不同章节请沿用同一名字）：\n"
                 + (known.length() == 0 ? "（暂无）\n" : known)
+                + reqBlock
                 + "\n第 " + chapterIndex + " 章 —— " + chapterTitle + "：\n\"\"\"\n"
                 + chapterContent + "\n\"\"\"\n\n"
                 + "请把本章按「时间+地点+在场人物」切分为若干场景，每个场景给出有序节拍："

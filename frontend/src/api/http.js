@@ -18,11 +18,13 @@ export function fetchSamples() {
 
 /**
  * 创建生成会话（不立即生成）。请求体为 snake_case，与后端 Jackson 一致。
+ * @param {object} p
+ * @param {string} [p.requirements] 用户上传时提出的改编需求（自由文本，可空）
  * @returns {Promise<string>} session_id
  */
-export function createSession({ sampleId, text, language, title } = {}) {
+export function createSession({ sampleId, text, language, title, requirements } = {}) {
   return http
-    .post('/generate', { sample_id: sampleId, text, language, title })
+    .post('/generate', { sample_id: sampleId, text, language, title, requirements })
     .then((r) => r.data.session_id)
 }
 

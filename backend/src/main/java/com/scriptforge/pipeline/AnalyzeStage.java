@@ -54,13 +54,24 @@ public class AnalyzeStage {
         this.llm = llm;
     }
 
+    /** 兼容重载：不带用户需求的理解。 */
     public ChapterFacts analyze(Chapter chapter, StoryState state, String language, PipelineListener listener) {
+        return analyze(chapter, state, language, listener, null);
+    }
+
+    /**
+     * 理解一章并更新角色圣经。
+     *
+     * @param userRequirements 用户改编需求（自由文本，可为空）；注入理解层提示以引导抽取
+     */
+    public ChapterFacts analyze(Chapter chapter, StoryState state, String language, PipelineListener listener,
+                                String userRequirements) {
         String chapterRef = "第" + chapter.index() + "章";
         String raw;
         try {
             String sys = PromptTemplates.analyzeSystem(language);
             String usr = PromptTemplates.analyzeUser(chapter.index(), chapter.title(),
-                    chapter.content(), state.snapshot(), language);
+                    chapter.content(), state.snapshot(), language, userRequirements);
             raw = llm.complete(sys, usr);
         } catch (Exception e) {
             log.warn("{} LLM 调用失败：{}", chapterRef, e.getMessage());

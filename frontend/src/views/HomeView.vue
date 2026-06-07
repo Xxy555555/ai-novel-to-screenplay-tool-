@@ -20,6 +20,7 @@ const samples = [
 const selectedSample = ref(null) // 'huozhe' | 'gift' | null
 const fileText = ref('') // 上传文件的纯文本内容
 const fileName = ref('') // 上传文件名（作为 title）
+const requirements = ref('') // 用户改编需求（可选，自由文本）
 // 已选中后用于「filled」区展示：{ name, desc, ok, note }
 const filled = ref(null)
 const zoneError = ref('') // 上传校验红字（仅空态可见，同原型）
@@ -108,6 +109,7 @@ function reset() {
   fileName.value = ''
   zoneError.value = ''
   submitError.value = ''
+  // 注意：不清空 requirements —— 更换素材时用户多半想沿用同一改编需求。
   if (fileInput.value) fileInput.value.value = ''
 }
 
@@ -185,13 +187,19 @@ async function onStart() {
   submitting.value = true
   try {
     let id
+    const reqText = requirements.value.trim() || undefined
     if (selectedSample.value) {
-      id = await createSession({ sampleId: selectedSample.value, language: language.value })
+      id = await createSession({
+        sampleId: selectedSample.value,
+        language: language.value,
+        requirements: reqText,
+      })
     } else {
       id = await createSession({
         text: fileText.value,
         language: language.value,
         title: fileName.value,
+        requirements: reqText,
       })
     }
     appStore.startSession(id, {
@@ -199,6 +207,7 @@ async function onStart() {
       sampleId: selectedSample.value,
       language: language.value,
       model: modelName.value,
+      requirements: reqText || '',
     })
     router.push('/progress')
   } catch (err) {
@@ -299,6 +308,20 @@ async function onStart() {
         >
           {{ s.label }} <span class="tag">{{ s.tag }}</span>
         </button>
+      </div>
+
+      <div class="reqbox">
+        <label for="req">
+          改编需求 <span class="opt">可选</span>
+          <span class="reqhint">告诉 AI 你的偏好，会注入生成并记入剧本元信息</span>
+        </label>
+        <textarea
+          id="req"
+          v-model="requirements"
+          rows="2"
+          maxlength="500"
+          placeholder="例如：突出悬疑紧张氛围；主角口吻更冷峻；保留全部对白；多用画外音表现心理。"
+        ></textarea>
       </div>
 
       <div class="actions">
@@ -665,8 +688,51 @@ h1 .hl {
 .chip.on .tag {
   color: var(--accent);
 }
+.reqbox {
+  width: min(720px, 100%);
+  margin: 22px auto 0;
+  text-align: left;
+}
+.reqbox label {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-2);
+  margin-bottom: 7px;
+}
+.reqbox label .opt {
+  font-size: 11px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+.reqbox label .reqhint {
+  color: var(--muted);
+  font-size: 12px;
+  margin-left: auto;
+}
+.reqbox textarea {
+  width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 10px;
+  padding: 11px 13px;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.55;
+  resize: vertical;
+  min-height: 56px;
+}
+.reqbox textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
 .actions {
-  margin: 34px auto 0;
+  margin: 26px auto 0;
   display: flex;
   gap: 14px;
   align-items: center;

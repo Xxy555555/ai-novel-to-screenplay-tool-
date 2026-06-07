@@ -125,7 +125,8 @@ public class AutoRepair {
                     meta == null ? null : meta.sourceTitle(),
                     meta == null ? null : meta.author(),
                     meta == null ? null : meta.language(),
-                    meta == null ? null : meta.generatedBy());
+                    meta == null ? null : meta.generatedBy(),
+                    meta == null ? null : meta.userRequirements());
         }
 
         Set<String> validIds = new LinkedHashSet<>();
