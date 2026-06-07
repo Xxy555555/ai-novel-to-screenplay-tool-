@@ -3,10 +3,12 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick } from 'v
 import { useRouter } from 'vue-router'
 import jsyaml from 'js-yaml'
 import { useAppStore } from '@/stores/app'
+import { useChatStore } from '@/stores/chat'
 import { fetchScreenplay, validateYaml, chatRefine } from '@/api/http'
 
 const router = useRouter()
 const store = useAppStore()
+const chat = useChatStore()
 
 const TYPE_LABEL = { action: '动作', dialogue: '对白', voiceover: '画外音 V.O.', transition: '转场', montage: '蒙太奇' }
 const TYPE_VAR = { action: 'el-action', dialogue: 'el-dialogue', voiceover: 'el-voiceover', transition: 'el-transition', montage: 'el-montage' }
@@ -28,11 +30,12 @@ const modelOpen = ref(false)
 const leftOpen = ref(false) // 窄屏：场景大纲抽屉
 const rightOpen = ref(false) // 窄屏：角色/质量抽屉
 
-// ───────── AI 多轮对话精修 ─────────
-const chatMessages = ref([]) // { role:'user'|'assistant', content, seed? }
+// ───────── AI 多轮对话精修（多线程历史） ─────────
+const chatMessages = computed(() => chat.messages) // 当前线程消息
 const chatInput = ref('')
 const chatBusy = ref(false)
 const chatScroll = ref(null)
+const threadsOpen = ref(false) // 历史线程列表展开
 
 // ───────── 载入 ─────────
 onMounted(async () => {
@@ -50,12 +53,13 @@ onMounted(async () => {
   }
   data.value = reactive(normalize(sp))
   selScene.value = data.value.scenes[0]?.id || ''
-  seedChat()
+  chat.loadThreads(store.sessionId) // 按会话载入历史对话（无则建空线程）
+  seedChatIfEmpty()
   document.addEventListener('click', onDocClick)
 })
 
-// 对话开场白：介绍能力，并在用户上传时填过需求时回显之。
-function seedChat() {
+// 开场白文案：介绍能力，并在用户上传时填过需求时回显之。
+function buildHello() {
   const req = store.source?.requirements
   let hello = '你好！我是剧本精修助手。直接用自然语言告诉我想怎么改，例如：'
     + '「把 S2 改得更紧张」「给主角加一句画外音」「标题改为《活着》」「删除 S4」。'
@@ -63,7 +67,29 @@ function seedChat() {
   if (req && req.trim()) {
     hello = '已收到你在上传时填写的改编需求：「' + req.trim() + '」。\n\n' + hello
   }
-  chatMessages.value = [{ role: 'assistant', content: hello, seed: true }]
+  return hello
+}
+// 当前线程为空时注入开场白（不每次 mount 清空，保留历史）。
+function seedChatIfEmpty() {
+  if (chat.messages.length === 0) chat.appendMessage('assistant', buildHello(), true)
+}
+// ── 历史线程操作 ──
+function onNewThread() {
+  chat.newThread()
+  seedChatIfEmpty()
+  threadsOpen.value = false
+  chatScrollToBottom()
+}
+function onSwitchThread(id) {
+  chat.switchThread(id)
+  seedChatIfEmpty()
+  threadsOpen.value = false
+  chatScrollToBottom()
+}
+function onDeleteThread(id) {
+  chat.deleteThread(id)
+  seedChatIfEmpty()
+  chatScrollToBottom()
 }
 onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
 
@@ -302,11 +328,11 @@ function chatScrollToBottom() {
 async function sendChat() {
   const msg = chatInput.value.trim()
   if (!msg || chatBusy.value) return
-  // 历史 = 已有真实对话（排除开场白 seed），不含本轮。
-  const history = chatMessages.value
+  // 历史 = 当前线程已有真实对话（排除开场白 seed），不含本轮。
+  const history = chat.messages
     .filter((m) => !m.seed)
     .map((m) => ({ role: m.role, content: m.content }))
-  chatMessages.value.push({ role: 'user', content: msg })
+  chat.appendMessage('user', msg)
   chatInput.value = ''
   chatBusy.value = true
   chatScrollToBottom()
@@ -317,7 +343,7 @@ async function sendChat() {
       history,
       language: store.source?.language || 'auto',
     })
-    chatMessages.value.push({ role: 'assistant', content: resp.reply || '（无回复）' })
+    chat.appendMessage('assistant', resp.reply || '（无回复）')
     if (resp.changed && resp.screenplay) {
       applyRefined(resp.screenplay)
       setValid(resp.valid !== false)
@@ -327,7 +353,7 @@ async function sendChat() {
     }
   } catch (e) {
     const m = e.response?.data?.message || e.message || '对话失败'
-    chatMessages.value.push({ role: 'assistant', content: '出错了：' + m })
+    chat.appendMessage('assistant', '出错了：' + m)
     toast('对话失败：' + m)
   } finally {
     chatBusy.value = false
@@ -701,6 +727,24 @@ function onDocClick(e) {
         </div>
 
         <div class="tabpane chat" v-show="activeTab === 'chat'">
+          <div class="chat-head">
+            <button class="th-toggle" :class="{ open: threadsOpen }" @click="threadsOpen = !threadsOpen" title="历史对话">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" /></svg>
+              历史对话 <b>{{ chat.threads.length }}</b>
+              <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6" /></svg>
+            </button>
+            <button class="th-new" @click="onNewThread" title="新建对话">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14" /></svg>新对话
+            </button>
+          </div>
+          <div class="thread-list" v-if="threadsOpen">
+            <div v-for="t in chat.threads" :key="t.id" class="thread" :class="{ on: t.id === chat.activeThreadId }" @click="onSwitchThread(t.id)">
+              <span class="t-title">{{ t.title || '新对话' }}</span>
+              <button class="t-del" @click.stop="onDeleteThread(t.id)" title="删除对话">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12" /></svg>
+              </button>
+            </div>
+          </div>
           <div class="chat-msgs" ref="chatScroll">
             <div v-for="(m, i) in chatMessages" :key="i" class="cmsg" :class="m.role">
               <span class="who" v-if="m.role === 'assistant'">AI</span>
@@ -807,7 +851,8 @@ button { font: inherit; cursor: pointer; }
 .char-list,
 .chat-msgs,
 .tabpane.qual,
-.script-page {
+.script-page,
+.thread-list {
   scrollbar-width: thin;
   scrollbar-color: var(--border-strong) transparent;
 }
@@ -988,6 +1033,24 @@ button { font: inherit; cursor: pointer; }
 
 /* AI 对话 */
 .tabpane.chat { display: flex; flex-direction: column; flex: 1; overflow: hidden; padding: 12px; }
+.chat-head { display: flex; align-items: center; gap: 8px; padding-bottom: 10px; border-bottom: 1px solid var(--border); flex: none; }
+.chat-head .th-toggle { display: inline-flex; align-items: center; gap: 6px; flex: 1; background: var(--raised); border: 1px solid var(--border); color: var(--text-2); border-radius: 8px; padding: 7px 10px; font-size: 12.5px; }
+.chat-head .th-toggle:hover { border-color: var(--border-strong); color: var(--text); }
+.chat-head .th-toggle b { color: var(--accent); font-family: var(--mono); font-size: 11px; }
+.chat-head .th-toggle svg { width: 14px; height: 14px; }
+.chat-head .th-toggle .chev { margin-left: auto; transition: 0.18s; }
+.chat-head .th-toggle.open .chev { transform: rotate(180deg); }
+.chat-head .th-new { display: inline-flex; align-items: center; gap: 5px; background: var(--accent-soft); border: 1px solid rgba(232, 179, 73, 0.3); color: var(--accent); border-radius: 8px; padding: 7px 11px; font-size: 12.5px; white-space: nowrap; }
+.chat-head .th-new:hover { border-color: var(--accent); }
+.chat-head .th-new svg { width: 14px; height: 14px; }
+.thread-list { flex: none; max-height: 180px; overflow-y: auto; margin: 8px 0 2px; display: flex; flex-direction: column; gap: 4px; }
+.thread { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--raised); cursor: pointer; transition: 0.12s; }
+.thread:hover { border-color: var(--border-strong); }
+.thread.on { border-color: var(--accent); background: var(--accent-soft); }
+.thread .t-title { flex: 1; font-size: 13px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.thread .t-del { flex: none; width: 22px; height: 22px; display: grid; place-items: center; background: none; border: none; color: var(--muted); border-radius: 5px; }
+.thread .t-del:hover { background: var(--inset); color: var(--danger); }
+.thread .t-del svg { width: 13px; height: 13px; }
 .chat-msgs { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding: 2px 2px 8px; }
 .cmsg { display: flex; flex-direction: column; max-width: 92%; }
 .cmsg.user { align-self: flex-end; align-items: flex-end; }
