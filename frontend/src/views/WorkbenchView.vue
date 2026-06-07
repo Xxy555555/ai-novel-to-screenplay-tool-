@@ -3,7 +3,7 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick } from 'v
 import { useRouter } from 'vue-router'
 import jsyaml from 'js-yaml'
 import { useAppStore } from '@/stores/app'
-import { fetchScreenplay, validateYaml } from '@/api/http'
+import { fetchScreenplay, validateYaml, chatRefine } from '@/api/http'
 
 const router = useRouter()
 const store = useAppStore()
@@ -16,7 +16,7 @@ const data = ref(null) // 响应式剧本（后端 snake_case 形状）
 const viewMode = ref('cards') // cards | yaml
 const yamlText = ref('')
 const selScene = ref('')
-const activeTab = ref('char') // char | qual
+const activeTab = ref('char') // char | qual | chat
 const charSearch = ref('')
 const dimChar = ref('') // 点击角色高亮其对白
 const valid = ref(true)
@@ -26,6 +26,12 @@ const exportOpen = ref(false)
 const modelOpen = ref(false)
 const leftOpen = ref(false) // 窄屏：场景大纲抽屉
 const rightOpen = ref(false) // 窄屏：角色/质量抽屉
+
+// ───────── AI 多轮对话精修 ─────────
+const chatMessages = ref([]) // { role:'user'|'assistant', content, seed? }
+const chatInput = ref('')
+const chatBusy = ref(false)
+const chatScroll = ref(null)
 
 // ───────── 载入 ─────────
 onMounted(async () => {
@@ -43,8 +49,21 @@ onMounted(async () => {
   }
   data.value = reactive(normalize(sp))
   selScene.value = data.value.scenes[0]?.id || ''
+  seedChat()
   document.addEventListener('click', onDocClick)
 })
+
+// 对话开场白：介绍能力，并在用户上传时填过需求时回显之。
+function seedChat() {
+  const req = store.source?.requirements
+  let hello = '你好！我是剧本精修助手。直接用自然语言告诉我想怎么改，例如：'
+    + '「把 S2 改得更紧张」「给主角加一句画外音」「标题改为《活着》」「删除 S4」。'
+    + '我会修改剧本、自动校验，并同步到左侧卡片与 YAML。'
+  if (req && req.trim()) {
+    hello = '已收到你在上传时填写的改编需求：「' + req.trim() + '」。\n\n' + hello
+  }
+  chatMessages.value = [{ role: 'assistant', content: hello, seed: true }]
+}
 onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
 
 function normalize(sp) {
@@ -234,6 +253,54 @@ async function revalidate() {
   } catch (e) {
     toast('重校验失败：' + (e.response?.data?.message || e.message))
   }
+}
+
+// ───────── AI 对话精修 ─────────
+function chatScrollToBottom() {
+  nextTick(() => {
+    const el = chatScroll.value
+    if (el) el.scrollTop = el.scrollHeight
+  })
+}
+async function sendChat() {
+  const msg = chatInput.value.trim()
+  if (!msg || chatBusy.value) return
+  // 历史 = 已有真实对话（排除开场白 seed），不含本轮。
+  const history = chatMessages.value
+    .filter((m) => !m.seed)
+    .map((m) => ({ role: m.role, content: m.content }))
+  chatMessages.value.push({ role: 'user', content: msg })
+  chatInput.value = ''
+  chatBusy.value = true
+  chatScrollToBottom()
+  try {
+    const resp = await chatRefine({
+      screenplay: plainScreenplay(),
+      message: msg,
+      history,
+      language: store.source?.language || 'auto',
+    })
+    chatMessages.value.push({ role: 'assistant', content: resp.reply || '（无回复）' })
+    if (resp.changed && resp.screenplay) {
+      applyRefined(resp.screenplay)
+      setValid(resp.valid !== false)
+      toast('AI 已更新剧本' + (resp.valid === false ? '（仍有校验问题）' : ' · Schema 合法'))
+    }
+  } catch (e) {
+    const m = e.response?.data?.message || e.message || '对话失败'
+    chatMessages.value.push({ role: 'assistant', content: '出错了：' + m })
+    toast('对话失败：' + m)
+  } finally {
+    chatBusy.value = false
+    chatScrollToBottom()
+  }
+}
+// 用 AI 返回的剧本替换工作区，并保持选中场景与视图同步。
+function applyRefined(sp) {
+  const keep = selScene.value
+  data.value = reactive(normalize(sp))
+  selScene.value = data.value.scenes.find((s) => s.id === keep)?.id || data.value.scenes[0]?.id || ''
+  if (viewMode.value === 'yaml') syncYamlFromModel()
 }
 
 // ───────── Fountain 预览（客户端渲染，反映当前编辑） ─────────
@@ -538,6 +605,7 @@ function onDocClick(e) {
         <div class="tabs">
           <button :class="{ on: activeTab === 'char' }" @click="activeTab = 'char'">角色圣经</button>
           <button :class="{ on: activeTab === 'qual' }" @click="activeTab = 'qual'">质量报告</button>
+          <button :class="{ on: activeTab === 'chat' }" @click="activeTab = 'chat'">AI 对话</button>
         </div>
 
         <div class="tabpane char" v-show="activeTab === 'char'">
@@ -584,6 +652,33 @@ function onDocClick(e) {
               <button v-if="it.scene_id" class="loc" @click="locate(it.scene_id)">定位</button>
             </div>
           </div>
+        </div>
+
+        <div class="tabpane chat" v-show="activeTab === 'chat'">
+          <div class="chat-msgs" ref="chatScroll">
+            <div v-for="(m, i) in chatMessages" :key="i" class="cmsg" :class="m.role">
+              <span class="who" v-if="m.role === 'assistant'">AI</span>
+              <div class="bubble">{{ m.content }}</div>
+            </div>
+            <div v-if="chatBusy" class="cmsg assistant">
+              <span class="who">AI</span>
+              <div class="bubble typing"><i></i><i></i><i></i></div>
+            </div>
+          </div>
+          <div class="chat-input">
+            <textarea
+              v-model="chatInput"
+              rows="2"
+              :disabled="chatBusy"
+              placeholder="例如：把 S2 改得更紧张；给主角加一句画外音；标题改为《活着》改编 …（Enter 发送，Shift+Enter 换行）"
+              @keydown.enter.exact.prevent="sendChat"
+            ></textarea>
+            <button class="send" :disabled="chatBusy || !chatInput.trim()" @click="sendChat">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" /></svg>
+              发送
+            </button>
+          </div>
+          <div class="chat-tip">改动会自动 Schema 校验并同步到卡片 / YAML · 可指定场景（S2 / 第2场）</div>
         </div>
       </aside>
     </div>
@@ -800,6 +895,30 @@ button { font: inherit; cursor: pointer; }
 .qtodo .ti .w { color: var(--warning); flex: none; }
 .qtodo .ti .loc { margin-left: auto; background: var(--raised); border: 1px solid var(--border); color: var(--accent); border-radius: 6px; padding: 3px 10px; font-size: 11px; }
 .qtodo .ti .loc:hover { border-color: var(--accent); }
+
+/* AI 对话 */
+.tabpane.chat { display: flex; flex-direction: column; flex: 1; overflow: hidden; padding: 12px; }
+.chat-msgs { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding: 2px 2px 8px; }
+.cmsg { display: flex; flex-direction: column; max-width: 92%; }
+.cmsg.user { align-self: flex-end; align-items: flex-end; }
+.cmsg.assistant { align-self: flex-start; align-items: flex-start; }
+.cmsg .who { font-size: 10px; color: var(--accent); font-family: var(--mono); margin: 0 0 3px 2px; letter-spacing: 0.06em; }
+.cmsg .bubble { font-size: 13.5px; line-height: 1.6; padding: 9px 12px; border-radius: 12px; white-space: pre-wrap; word-break: break-word; }
+.cmsg.user .bubble { background: var(--accent-soft); border: 1px solid rgba(232, 179, 73, 0.3); color: var(--text); border-bottom-right-radius: 4px; }
+.cmsg.assistant .bubble { background: var(--raised); border: 1px solid var(--border); color: var(--text-2); border-bottom-left-radius: 4px; }
+.cmsg .bubble.typing { display: inline-flex; gap: 4px; align-items: center; }
+.cmsg .bubble.typing i { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); animation: blink 1.2s infinite both; }
+.cmsg .bubble.typing i:nth-child(2) { animation-delay: 0.2s; }
+.cmsg .bubble.typing i:nth-child(3) { animation-delay: 0.4s; }
+@keyframes blink { 0%, 80%, 100% { opacity: 0.25; } 40% { opacity: 1; } }
+.chat-input { display: flex; gap: 8px; align-items: flex-end; padding-top: 10px; border-top: 1px solid var(--border); flex: none; }
+.chat-input textarea { flex: 1; background: var(--inset); border: 1px solid var(--border); color: var(--text); border-radius: 9px; padding: 9px 11px; font: inherit; font-size: 13.5px; line-height: 1.5; resize: none; }
+.chat-input textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.chat-input .send { display: inline-flex; align-items: center; gap: 6px; background: var(--accent); color: #0e1116; border: none; border-radius: 9px; padding: 9px 14px; font-size: 13px; font-weight: 600; white-space: nowrap; }
+.chat-input .send:hover { background: var(--accent-hover); }
+.chat-input .send:disabled { background: var(--raised); color: var(--muted); cursor: not-allowed; }
+.chat-input .send svg { width: 15px; height: 15px; }
+.chat-tip { font-size: 11px; color: var(--muted); margin-top: 8px; flex: none; }
 
 /* ---------- preview drawer ---------- */
 .scrim { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.6); opacity: 0; pointer-events: none; transition: 0.2s; z-index: 80; }
