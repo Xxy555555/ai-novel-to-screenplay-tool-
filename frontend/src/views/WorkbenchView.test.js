@@ -4,11 +4,12 @@ import { createPinia, setActivePinia } from 'pinia'
 
 const { mockReplace, mockPush } = vi.hoisted(() => ({ mockReplace: vi.fn(), mockPush: vi.fn() }))
 vi.mock('vue-router', () => ({ useRouter: () => ({ replace: mockReplace, push: mockPush }) }))
-const { mockChatRefine } = vi.hoisted(() => ({ mockChatRefine: vi.fn() }))
+const { mockChatRefine, mockEvaluate } = vi.hoisted(() => ({ mockChatRefine: vi.fn(), mockEvaluate: vi.fn() }))
 vi.mock('@/api/http', () => ({
   fetchScreenplay: vi.fn(),
   validateYaml: vi.fn(),
   chatRefine: mockChatRefine,
+  evaluateQuality: mockEvaluate,
 }))
 
 import WorkbenchView from './WorkbenchView.vue'
@@ -55,7 +56,32 @@ describe('WorkbenchView —— AI 多轮对话精修（Feature 1b）', () => {
     mockReplace.mockReset()
     mockPush.mockReset()
     mockChatRefine.mockReset()
+    mockEvaluate.mockReset()
     localStorage.clear()
+  })
+
+  it('AI 评测：点「开始评测」展示评分/评价/建议（Feature 4）', async () => {
+    const { w, store } = await mountWorkbench()
+    store.sessionId = 'sess-1' // runEval 需要会话以取原著
+    mockEvaluate.mockResolvedValue({
+      score: 78,
+      assessment: '改编较忠实于原著，戏剧张力可再加强。',
+      suggestions: ['强化主角动机', '精简冗长动作描写'],
+      ai_evaluated: true,
+    })
+    await w.findAll('.tabs button')[1].trigger('click') // 质量报告页
+    await w.find('.ae-run').trigger('click')
+    await flushPromises()
+
+    expect(mockEvaluate).toHaveBeenCalledTimes(1)
+    const arg = mockEvaluate.mock.calls[0][0]
+    expect(arg.sessionId).toBe('sess-1')
+    expect(arg.screenplay.scenes[0].id).toBe('S1')
+
+    const ae = w.find('.ai-eval')
+    expect(ae.text()).toContain('78')
+    expect(ae.text()).toContain('改编较忠实于原著')
+    expect(ae.text()).toContain('强化主角动机')
   })
 
   it('多线程历史：新建对话与原线程互不干扰、可切回（Feature 3）', async () => {

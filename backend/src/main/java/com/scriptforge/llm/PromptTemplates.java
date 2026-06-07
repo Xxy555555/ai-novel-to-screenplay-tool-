@@ -165,6 +165,52 @@ public final class PromptTemplates {
                 + "请按系统要求只返回 JSON 信封：{ \"reply\": \"…\", \"screenplay\": { … } }";
     }
 
+    // ───────────────────────── 改编质量评测（隔离上下文） ─────────────────────────
+
+    /** 标记：评测用户消息中「原著小说」分隔符。 */
+    public static final String EVAL_NOVEL_MARKER = "【原著小说原文】";
+    /** 标记：评测用户消息中「改编后剧本」分隔符。 */
+    public static final String EVAL_SCREENPLAY_MARKER = "【改编后剧本 JSON】";
+
+    /**
+     * 质量评测系统提示：把模型定位为「只依据所给原著与剧本、不引入外部上下文」的改编质量评审，
+     * 只输出 {@code {"score","assessment","suggestions"}} JSON 信封。隔离设计 —— 不传入角色圣经、
+     * 对话历史、用户需求等任何其它上下文，避免干扰判断。
+     */
+    public static String evaluateSystem(String language) {
+        boolean en = "en".equalsIgnoreCase(language);
+        if (en) {
+            return "You are a screenplay-adaptation quality reviewer. You are given ONLY the original novel text "
+                    + "and the adapted screenplay. Judge how well the screenplay adapts the novel: fidelity to plot "
+                    + "and characters, dramatic effectiveness, dialogue quality, scene structure, and show-don't-tell. "
+                    + "Base your judgement SOLELY on the two texts provided — do NOT use outside knowledge or any other "
+                    + "context. Output STRICT JSON ONLY, no markdown, no prose, in this exact shape:\n"
+                    + "{ \"score\": <0-100 integer>, \"assessment\": \"<2-4 sentence overall judgement>\", "
+                    + "\"suggestions\": [\"<concrete, actionable suggestion>\", ...] }\n"
+                    + "Give 3-6 specific suggestions tied to the screenplay.";
+        }
+        return "你是剧本改编质量评审。你只会拿到「原著小说原文」与「改编后剧本」两份材料。请评估剧本对原著的"
+                + "改编质量：对情节与人物的忠实度、戏剧性、对白质量、场景结构、以及「展示而非陈述」。"
+                + "判断必须<strong>只依据所给的这两份文本</strong>，不要使用外部知识或任何其它上下文。"
+                + "只输出严格合法的 JSON（不要 markdown、不要解释），且必须是以下信封形状：\n"
+                + "{ \"score\": <0-100 的整数>, \"assessment\": \"<2~4 句总体评价>\", "
+                + "\"suggestions\": [\"<具体、可操作的修改建议>\", ...] }\n"
+                + "请给出 3~6 条针对该剧本的具体建议。";
+    }
+
+    /**
+     * 质量评测用户提示：仅内嵌原著小说与改编剧本（用固定标记包裹，便于离线/真实模型一致解析）。
+     * 刻意不附带其它上下文，以隔离判断。
+     *
+     * @param screenplayJson 改编后剧本的 JSON 字符串（snake_case）
+     * @param novelText      原著小说原文
+     */
+    public static String evaluateUser(String screenplayJson, String novelText) {
+        return EVAL_NOVEL_MARKER + "\n" + (novelText == null ? "" : novelText.trim()) + "\n\n"
+                + EVAL_SCREENPLAY_MARKER + "\n" + (screenplayJson == null ? "" : screenplayJson) + "\n\n"
+                + "请按系统要求只返回 JSON 信封：{ \"score\": …, \"assessment\": \"…\", \"suggestions\": [ … ] }";
+    }
+
     /**
      * 修复提示：把 Schema 校验错误连同不合法输出回喂模型，要求只返回修正后的 YAML/JSON。
      * 供 {@code AutoRepair} 使用。

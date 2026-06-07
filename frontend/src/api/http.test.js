@@ -6,7 +6,7 @@ vi.mock('axios', () => ({
   default: { create: () => ({ get: mockGet, post: mockPost }) },
 }))
 
-import { createSession, chatRefine, validateYaml, fetchScreenplay, streamUrl } from './http'
+import { createSession, chatRefine, validateYaml, fetchScreenplay, streamUrl, evaluateQuality } from './http'
 
 describe('api/http', () => {
   beforeEach(() => {
@@ -70,5 +70,14 @@ describe('api/http', () => {
 
   it('streamUrl 拼出 SSE 地址', () => {
     expect(streamUrl('abc')).toBe('/api/generate/abc/stream')
+  })
+
+  it('evaluateQuality 走 /evaluate/{sessionId} 并提交 screenplay/language', async () => {
+    const resp = { score: 82, assessment: '改编忠实', suggestions: ['加强对白'], ai_evaluated: true }
+    mockPost.mockResolvedValue({ data: resp })
+    const sp = { meta: { title: 'x' }, scenes: [] }
+    const out = await evaluateQuality({ sessionId: 'sess-7', screenplay: sp, language: 'zh' })
+    expect(out).toEqual(resp)
+    expect(mockPost).toHaveBeenCalledWith('/evaluate/sess-7', { screenplay: sp, language: 'zh' })
   })
 })
