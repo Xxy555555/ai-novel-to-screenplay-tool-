@@ -63,4 +63,26 @@ class OpenAiCompatibleClientTest {
         assertEquals("已重写所有场景。", out);
         server.verify();
     }
+
+    @Test
+    void chatStreamAggregatesSseDeltas() {
+        RestClient.Builder builder = RestClient.builder();
+        MockRestServiceServer server = MockRestServiceServer.bindTo(builder).build();
+        OpenAiCompatibleClient client = new OpenAiCompatibleClient(props(), builder);
+
+        String sse = "data: {\"choices\":[{\"delta\":{\"content\":\"已把\"}}]}\n\n"
+                + "data: {\"choices\":[{\"delta\":{\"content\":\"S1 改\"}}]}\n\n"
+                + "data: {\"choices\":[{\"delta\":{\"content\":\"得更紧张。\"}}]}\n\n"
+                + "data: [DONE]\n\n";
+        server.expect(requestTo("https://example.test/v1/chat/completions"))
+                .andRespond(withSuccess(sse, MediaType.parseMediaType("text/event-stream")));
+
+        StringBuilder got = new StringBuilder();
+        String full = client.chatStream("sys",
+                java.util.List.of(new LlmClient.ChatMessage("user", "hi")), got::append);
+
+        assertEquals("已把S1 改得更紧张。", full);
+        assertEquals("已把S1 改得更紧张。", got.toString());
+        server.verify();
+    }
 }

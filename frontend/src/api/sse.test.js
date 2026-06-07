@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { openGeneration } from './sse'
+import { openGeneration, streamChat } from './sse'
 
 // 用假 EventSource 验证 openGeneration 的事件绑定、JSON 解析与自动 close。
 class FakeEventSource {
@@ -65,5 +65,42 @@ describe('api/sse openGeneration', () => {
     es.emit('error', JSON.stringify({ message: '会话不存在' }))
     expect(onError).toHaveBeenCalledWith({ message: '会话不存在' })
     expect(es.closed).toBe(true)
+  })
+})
+
+describe('streamChat（fetch 流式读取 SSE）', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('解析 token/done 事件，token 拼成完整回复', async () => {
+    const frames =
+      'event:token\ndata:{"text":"已把"}\n\n' +
+      'event:token\ndata:{"text":"S1 改紧张"}\n\n' +
+      'event:done\ndata:{"reply":"已把S1改紧张","changed":true,"screenplay":{"meta":{}}}\n\n'
+    const enc = new TextEncoder()
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: new ReadableStream({
+        start(c) {
+          c.enqueue(enc.encode(frames))
+          c.close()
+        },
+      }),
+    })
+    const tokens = []
+    let done = null
+    await streamChat({ message: 'x' }, { onToken: (t) => tokens.push(t), onDone: (d) => (done = d) })
+    expect(tokens.join('')).toBe('已把S1 改紧张')
+    expect(done).toMatchObject({ reply: '已把S1改紧张', changed: true })
+    expect(global.fetch).toHaveBeenCalledWith('/api/chat/stream', expect.objectContaining({ method: 'POST' }))
+  })
+
+  it('HTTP 错误时回调 onError', async () => {
+    global.fetch = vi.fn().mockResolvedValue({ ok: false, status: 502, body: null })
+    const onError = vi.fn()
+    await streamChat({ message: 'x' }, { onError })
+    expect(onError).toHaveBeenCalled()
   })
 })

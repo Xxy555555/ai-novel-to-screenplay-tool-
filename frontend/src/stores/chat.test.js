@@ -85,4 +85,15 @@ describe('useChatStore', () => {
     expect(c.messages.map((m) => m.content)).toContain('临时消息')
     expect(localStorage.length).toBe(0)
   })
+
+  it('updateLastAssistant 更新最后一条 assistant 消息（流式用）', () => {
+    const c = useChatStore()
+    c.loadThreads('sess-1')
+    c.appendMessage('user', '把 S1 改紧张')
+    c.appendMessage('assistant', '')
+    c.updateLastAssistant('已把 S1')
+    c.updateLastAssistant('已把 S1 改得更紧张。')
+    const msgs = c.messages
+    expect(msgs[msgs.length - 1].content).toBe('已把 S1 改得更紧张。')
+  })
 })

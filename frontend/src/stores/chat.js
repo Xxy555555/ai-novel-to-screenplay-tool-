@@ -100,6 +100,17 @@ export const useChatStore = defineStore('chat', {
       }
       this.persist()
     },
+    // 更新当前线程最后一条 assistant 消息内容（流式逐字刷新用）。
+    updateLastAssistant(content) {
+      const t = this.activeThread
+      if (!t || !t.messages.length) return
+      const last = t.messages[t.messages.length - 1]
+      if (last.role === 'assistant') {
+        last.content = content
+        t.updatedAt = Date.now()
+        this.persist()
+      }
+    },
     renameThread(id, title) {
       const t = this.threads.find((x) => x.id === id)
       if (t) {
