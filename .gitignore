@@ -30,3 +30,6 @@ Thumbs.db
 
 # gstack 浏览器/工具本地数据
 .gstack/
+
+# 本地截图，勿提交
+Snipaste_*.png
