@@ -46,8 +46,11 @@ class PromptTemplatesTest {
         assertTrue(sys.contains("reply") && sys.contains("screenplay"), "系统提示应声明信封字段");
         assertTrue(sys.contains("简短"), "系统提示应要求 reply 尽量简短");
         assertTrue(sys.contains("元数据"), "系统提示应禁止在回复中复述元数据");
+        assertTrue(sys.contains("面向用户") && sys.contains("页面"), "应要求用面向用户、描述页面可见改动的话回复");
+        assertTrue(sys.contains("字段") && sys.contains("source_title"), "应明确禁止在回复里出现内部字段名/数据结构术语");
         assertTrue(PromptTemplates.refineSystem("en").contains("as short as possible"), "英文提示亦应要求简短");
         assertTrue(PromptTemplates.refineSystem("en").contains("metadata"), "英文提示应禁止在回复中复述元数据");
+        assertTrue(PromptTemplates.refineSystem("en").contains("user-facing"), "英文提示应要求面向用户的回复");
 
         String user = PromptTemplates.refineUser("{\"meta\":{\"title\":\"x\"}}", "把 S2 改得更紧张");
         assertTrue(user.contains(PromptTemplates.REFINE_SCREENPLAY_MARKER), "应含剧本标记");
