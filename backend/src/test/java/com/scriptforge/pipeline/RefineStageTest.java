@@ -5,6 +5,7 @@ import java.util.Optional;
 
 import org.junit.jupiter.api.Test;
 
+import com.scriptforge.llm.LlmClient;
 import com.scriptforge.llm.LlmProperties;
 import com.scriptforge.llm.StubLlmClient;
 import com.scriptforge.model.Character;
@@ -116,6 +117,62 @@ class RefineStageTest {
         assertEquals(2, r.screenplay().scenes().size());
         assertNotNull(r.reply());
         assertFalse(r.reply().isBlank());
+    }
+
+    /** 用一个固定返回 {@code raw} 的假 LLM 构造 RefineStage，模拟真实模型的各种返回形态。 */
+    private RefineStage refineReturning(String raw) {
+        LlmProperties props = new LlmProperties();
+        StubLlmClient stub = new StubLlmClient(props);
+        SchemaValidator validator = new SchemaValidator();
+        AutoRepair repair = new AutoRepair(validator, stub, props);
+        QualityReporter quality = new QualityReporter();
+        LlmClient fake = new LlmClient() {
+            @Override public String complete(String s, String u) { return raw; }
+            @Override public String describe() { return "fake"; }
+            @Override public String chat(String s, List<LlmClient.ChatMessage> m) { return raw; }
+        };
+        return new RefineStage(fake, repair, quality, validator);
+    }
+
+    private static final String VALID_SP =
+            "{\"meta\":{\"title\":\"群山回唱\",\"language\":\"zh\"},"
+            + "\"characters\":[{\"id\":\"C1\",\"name\":\"林深\"}],"
+            + "\"scenes\":[{\"id\":\"S1\",\"heading\":{\"int_ext\":\"INT\",\"location\":\"书房\",\"time_of_day\":\"夜\"},"
+            + "\"present_characters\":[\"C1\"],\"elements\":[{\"type\":\"action\",\"text\":\"林深推门而入。\"}]}]}";
+
+    @Test
+    void garbledOrTruncatedOutputIsNotEchoedAsReply() {
+        // 真实模型把剧本/Schema 当文本吐回、且 JSON 被截断 → 无法解析为剧本。
+        String raw = "好的，这是更新后的剧本以及它遵循的 Schema：\n```json\n"
+                + "{\"meta\":{\"title\":\"X\"},\"scenes\":[{\"id\":\"S1\",\"heading\":{\"int_ext\":\"INT\"";
+        RefineStage.RefineResult r = refineReturning(raw).refine(baseScreenplay(), "把 S1 改紧张", List.of(), "zh");
+        assertFalse(r.changed(), "无法解析时不应改动");
+        assertEquals(2, r.screenplay().scenes().size(), "应保留原剧本");
+        assertFalse(r.reply().contains("\"scenes\""), "回复不应包含 Schema/JSON 字段转储");
+        assertFalse(r.reply().contains("```"), "回复不应包含 markdown 围栏");
+        assertTrue(r.reply().length() < 200, "回复应简短");
+    }
+
+    @Test
+    void verboseReplyWithEmbeddedJsonIsSanitized() {
+        // 模型返回了合法信封，但 reply 里塞了 Schema/JSON 转储。
+        String raw = "{\"reply\":\"已把标题改为群山回唱。完整 Schema 如下：{\\\"scenes\\\":[{\\\"id\\\":\\\"S1\\\"}]} 以上。\","
+                + "\"screenplay\":" + VALID_SP + "}";
+        RefineStage.RefineResult r = refineReturning(raw).refine(baseScreenplay(), "把标题改为群山回唱", List.of(), "zh");
+        assertTrue(r.changed(), "应解析出剧本并判定改动");
+        assertEquals("群山回唱", r.screenplay().meta().title());
+        assertTrue(r.reply().contains("已把标题改为群山回唱"), "应保留自然语言部分");
+        assertFalse(r.reply().contains("\"scenes\""), "应剔除 reply 中的 Schema/JSON 转储");
+    }
+
+    @Test
+    void markdownWrappedEnvelopeStillSyncs() {
+        // 回归：模型用 ```json 围栏 + 前后散文包裹合法信封，仍应解析并同步。
+        String raw = "当然，这是结果：\n```json\n{\"reply\":\"已把标题改为群山回唱\",\"screenplay\":" + VALID_SP + "}\n```";
+        RefineStage.RefineResult r = refineReturning(raw).refine(baseScreenplay(), "把标题改为群山回唱", List.of(), "zh");
+        assertTrue(r.changed());
+        assertEquals("群山回唱", r.screenplay().meta().title());
+        assertEquals("已把标题改为群山回唱", r.reply());
     }
 
     @Test

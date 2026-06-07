@@ -117,9 +117,12 @@ public class RefineStage {
         }
 
         if (refined == null) {
-            String r = reply != null && !reply.isBlank() ? reply
-                    : (raw == null || raw.isBlank() ? "（模型未返回内容）" : raw.strip());
-            return unchanged(current, r);
+            // 解析不到剧本：绝不把原始输出（可能含 Schema/JSON 转储或被截断的内容）回灌给用户。
+            String note = sanitizeReply(reply);
+            if (note == null || note.isBlank()) {
+                note = "未能解析本次返回的剧本改动，已保留当前剧本，请重试或换一种说法。";
+            }
+            return unchanged(current, note);
         }
 
         // 保证 Schema 合法（与生成主链路一致的兜底），再重新评分。
@@ -130,7 +133,8 @@ public class RefineStage {
         Screenplay withReport = new Screenplay(repaired.meta(), repaired.characters(), repaired.scenes(), report);
         List<String> errors = errorsOf(withReport);
 
-        String r = reply != null && !reply.isBlank() ? reply
+        String note = sanitizeReply(reply);
+        String r = note != null && !note.isBlank() ? note
                 : (changed ? "已根据你的指令更新剧本。" : "剧本未发生变化。");
         return new RefineResult(r, withReport, changed, ro.errorCount(), errors);
     }
@@ -154,6 +158,25 @@ public class RefineStage {
         } catch (Exception e) {
             return List.of("序列化失败: " + e.getMessage());
         }
+    }
+
+    /**
+     * 清洗 AI 自然语言回复：去 markdown 围栏、截断到首个 JSON 大括号之前、限制长度。
+     * 目的：回复只保留「改了哪里」的自然语言，绝不把 Schema / JSON 转储灌给用户（评审反馈）。
+     */
+    static String sanitizeReply(String s) {
+        if (s == null) {
+            return null;
+        }
+        String t = s.replace("```json", " ").replace("```JSON", " ").replace("```", " ").trim();
+        int brace = t.indexOf('{');
+        if (brace >= 0) {
+            t = t.substring(0, brace).trim();
+        }
+        if (t.length() > 300) {
+            t = t.substring(0, 300).trim() + "…";
+        }
+        return t;
     }
 
     /** 容错：去掉可能的 ```json 围栏，截取首个 '{' 到末个 '}' 之间的 JSON。 */

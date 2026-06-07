@@ -29,8 +29,8 @@ public class LlmProperties {
     private int chunkSize = 3500;
     /** Schema 不合法时回喂模型修复的最大重试次数。 */
     private int maxRepairRetries = 2;
-    /** 单次补全的最大输出 token（claude 必填；openai 作上限）。 */
-    private int maxTokens = 4096;
+    /** 单次补全的最大输出 token（claude 必填；openai 作上限）。精修需回吐完整剧本，故默认放宽到 8192 防截断。 */
+    private int maxTokens = 8192;
 
     public String getProvider() { return provider; }
     public void setProvider(String provider) { this.provider = provider; }
