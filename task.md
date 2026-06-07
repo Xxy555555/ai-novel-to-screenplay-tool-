@@ -22,8 +22,11 @@
 | R1 | PR3：AI 回复禁止复述元数据（标题/语言/id/JSON 字段名等），只说改动位置 | `feat/chat-03-concise-sync` | ✅ 已完成（TDD 先红后绿） |
 | R2 | PR3：复核并断言「对话改动后卡片即时同步」 | `feat/chat-03-concise-sync` | ✅ 已覆盖（既有用例：卡片情绪随对话更新） |
 | R3 | PR1：修复高度链断裂（`.wb` 改 `100dvh`），令三栏真正各自出现滚动条 | `feat/ui-01-scroll-home` | ✅ 已完成（Playwright e2e 先红后绿） |
+| R4 | PR3：真实模型鲁棒性 —— 回复不漏 Schema（`sanitizeReply`）+ 防截断（max-tokens 8192）+ 解析失败友好兜底，确保改动同步 | `feat/chat-03-concise-sync` | ✅ 已完成（TDD 先红后绿 + 真实模型实测） |
 
 > R1 走标准 TDD（PromptTemplatesTest 先加「元数据/metadata」禁令断言→红→补提示→绿）；R2 由既有组件用例覆盖（对话后 `.atag.mood` 更新）；R3 为纯 CSS，单测无法可靠断言（已实测 happy-dom 不计算 scoped 样式），以 `e2e/tests/scroll-and-home.spec.js` 真实浏览器先红（整页 scrollHeight 1051 > 视口 722）后绿验证。
+>
+> R4 复盘：评审在**真实 LLM**（agnes-2.0-flash）下仍见「回复含 Schema、改动不同步」。根因——模型未严格回吐 `{reply,screenplay}` 信封 / 输出被 4096 token 截断 → `RefineStage` 解析失败后把原始输出（含 Schema 转储）当回复返回、且剧本未变。修复：`RefineStage.sanitizeReply`（去围栏/截断到首个 `{` 前/限长）用于成功与失败两条路径，解析失败回友好提示而非原始输出；`max-tokens` 4096→8192（可经 `SCRIPTFORGE_LLM_MAX_TOKENS` 覆盖）防截断。TDD：RefineStageTest 先加「截断/含 Schema 输出不得进回复」「reply 内嵌 JSON 须剔除」两条失败用例→红→补 `sanitizeReply`→绿；并加 markdown 围栏信封回归用例。最后用真实模型实测：`把标题改为《群山回唱》` → 回复「已将剧本标题修改为《群山回唱》。」（16 字、无 Schema/围栏）、`changed=true`、标题已更新、可同步。
 
 ---
 
