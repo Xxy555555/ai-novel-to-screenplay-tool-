@@ -55,6 +55,31 @@ describe('WorkbenchView —— AI 多轮对话精修（Feature 1b）', () => {
     mockReplace.mockReset()
     mockPush.mockReset()
     mockChatRefine.mockReset()
+    localStorage.clear()
+  })
+
+  it('多线程历史：新建对话与原线程互不干扰、可切回（Feature 3）', async () => {
+    const { w } = await mountWorkbench()
+    await w.findAll('.tabs button')[2].trigger('click') // 切到对话页
+    mockChatRefine.mockResolvedValue({ reply: '好的', changed: false })
+    await w.find('.chat-input textarea').setValue('测试消息一')
+    await w.find('.chat-input .send').trigger('click')
+    await flushPromises()
+    expect(w.find('.tabpane.chat').text()).toContain('测试消息一')
+
+    // 新建对话：新线程只有开场白，不含上一线程的消息
+    await w.find('.th-new').trigger('click')
+    await flushPromises()
+    expect(w.find('.tabpane.chat').text()).not.toContain('测试消息一')
+    expect(w.find('.chat-msgs').text()).toContain('剧本精修助手')
+
+    // 展开历史应有 2 条线程；点回原线程恢复其消息
+    await w.find('.th-toggle').trigger('click')
+    const threads = w.findAll('.thread')
+    expect(threads.length).toBe(2)
+    await threads[1].trigger('click') // 最旧的在下方（newest 置顶）
+    await flushPromises()
+    expect(w.find('.tabpane.chat').text()).toContain('测试消息一')
   })
 
   it('「返回首页」按钮跳转到 /（Feature 1b）', async () => {
