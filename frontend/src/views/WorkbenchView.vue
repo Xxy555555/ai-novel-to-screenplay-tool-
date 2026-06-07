@@ -6,6 +6,8 @@ import { useAppStore } from '@/stores/app'
 import { useChatStore } from '@/stores/chat'
 import { fetchScreenplay, validateYaml, chatRefine, evaluateQuality } from '@/api/http'
 import { diffScreenplay } from '@/utils/screenplayDiff'
+import { streamChat } from '@/api/sse'
+import { extractReplyFromPartial } from '@/utils/replyExtract'
 
 const router = useRouter()
 const store = useAppStore()
@@ -338,6 +340,10 @@ function chatScrollToBottom() {
 async function sendChat() {
   const msg = chatInput.value.trim()
   if (!msg || chatBusy.value) return
+  if (pendingDiff.value) {
+    toast('请先采纳或拒绝当前待确认的改动')
+    return
+  }
   // 历史 = 当前线程已有真实对话（排除开场白 seed），不含本轮。
   const history = chat.messages
     .filter((m) => !m.seed)
@@ -345,23 +351,44 @@ async function sendChat() {
   chat.appendMessage('user', msg)
   chatInput.value = ''
   chatBusy.value = true
+  chat.appendMessage('assistant', '') // 流式占位气泡，逐字填充
   chatScrollToBottom()
+  const payload = { screenplay: plainScreenplay(), message: msg, history, language: store.source?.language || 'auto' }
+
+  const onResult = (resp) => {
+    chat.updateLastAssistant(resp.reply || '（无回复）')
+    if (resp.changed && resp.screenplay) proposeRefined(resp.screenplay)
+    else toast('AI 未对剧本做改动')
+  }
+
+  let raw = ''
+  let done = false
+  let streamErr = null
   try {
-    const resp = await chatRefine({
-      screenplay: plainScreenplay(),
-      message: msg,
-      history,
-      language: store.source?.language || 'auto',
+    await streamChat(payload, {
+      onToken: (chunk) => {
+        raw += chunk
+        const reply = extractReplyFromPartial(raw)
+        if (reply) chat.updateLastAssistant(reply)
+        chatScrollToBottom()
+      },
+      onDone: (resp) => {
+        done = true
+        onResult(resp)
+      },
+      onError: (e) => {
+        streamErr = e?.message || '流式失败'
+      },
     })
-    chat.appendMessage('assistant', resp.reply || '（无回复）')
-    if (resp.changed && resp.screenplay) {
-      proposeRefined(resp.screenplay) // 不自动应用：先生成 diff 待用户采纳/拒绝
-    } else {
-      toast('AI 未对剧本做改动')
+    if (!done) {
+      // 流式未完成（网络/瞬时错误）→ 回退到非流式精修。
+      if (streamErr) console.warn('流式对话回退：', streamErr)
+      const resp = await chatRefine(payload)
+      onResult(resp)
     }
   } catch (e) {
     const m = e.response?.data?.message || e.message || '对话失败'
-    chat.appendMessage('assistant', '出错了：' + m)
+    chat.updateLastAssistant('出错了：' + m)
     toast('对话失败：' + m)
   } finally {
     chatBusy.value = false
@@ -947,7 +974,7 @@ function onDocClick(e) {
           <div class="chat-input">
             <textarea
               v-model="chatInput"
-              rows="2"
+              rows="4"
               :disabled="chatBusy"
               placeholder="例如：把 S2 改得更紧张；给主角加一句画外音；标题改为《活着》改编 …（Enter 发送，Shift+Enter 换行）"
               @keydown.enter.exact.prevent="sendChat"
