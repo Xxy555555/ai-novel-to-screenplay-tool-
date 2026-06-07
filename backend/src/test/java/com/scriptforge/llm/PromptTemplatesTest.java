@@ -44,6 +44,8 @@ class PromptTemplatesTest {
     void refinePromptsCarryAgreedMarkers() {
         String sys = PromptTemplates.refineSystem("zh");
         assertTrue(sys.contains("reply") && sys.contains("screenplay"), "系统提示应声明信封字段");
+        assertTrue(sys.contains("简短"), "系统提示应要求 reply 尽量简短");
+        assertTrue(PromptTemplates.refineSystem("en").contains("as short as possible"), "英文提示亦应要求简短");
 
         String user = PromptTemplates.refineUser("{\"meta\":{\"title\":\"x\"}}", "把 S2 改得更紧张");
         assertTrue(user.contains(PromptTemplates.REFINE_SCREENPLAY_MARKER), "应含剧本标记");

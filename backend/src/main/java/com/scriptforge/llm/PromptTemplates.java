@@ -132,13 +132,19 @@ public final class PromptTemplates {
                     + "did not mention. Keep the same JSON structure (meta / characters / scenes / report) and the "
                     + "same id scheme (characters C1.., scenes S1.., character references by id). Output STRICT JSON "
                     + "ONLY in this exact shape, no markdown, no prose:\n"
-                    + "{ \"reply\": \"<short note describing what you changed>\", \"screenplay\": { ...full screenplay... } }";
+                    + "{ \"reply\": \"<what changed>\", \"screenplay\": { ...full screenplay... } }\n"
+                    + "The \"reply\" MUST be as short as possible: 1-2 sentences stating ONLY which places were "
+                    + "changed (e.g. \"Made S2 more tense; added a V.O. line for C1.\"). No greetings, no apologies, "
+                    + "no restating the screenplay, no extra explanation.";
         }
         return "你是剧本精修助手。给定「当前剧本」与「用户指令」，请返回修改后的<strong>完整剧本</strong>，"
                 + "保留用户未提及的场景/角色，沿用相同结构（meta / characters / scenes / report）与 id 体系"
                 + "（角色 C1.. 场景 S1.. 对白以角色 id 引用）。只输出严格合法的 JSON（不要 markdown、不要解释），"
                 + "且必须是以下信封形状：\n"
-                + "{ \"reply\": \"<对所做修改的简要中文说明>\", \"screenplay\": { …完整剧本… } }";
+                + "{ \"reply\": \"<改了哪里>\", \"screenplay\": { …完整剧本… } }\n"
+                + "其中 reply 必须尽量简短：用 1～2 句话只说明改动了哪些地方"
+                + "（例如「已把 S2 改得更紧张；给 C1 加了一句画外音。」），不要寒暄、不要道歉、"
+                + "不要复述剧本、不要多余解释。";
     }
 
     /**
