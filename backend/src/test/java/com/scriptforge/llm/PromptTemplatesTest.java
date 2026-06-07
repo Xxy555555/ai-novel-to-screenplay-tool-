@@ -44,11 +44,33 @@ class PromptTemplatesTest {
     void refinePromptsCarryAgreedMarkers() {
         String sys = PromptTemplates.refineSystem("zh");
         assertTrue(sys.contains("reply") && sys.contains("screenplay"), "系统提示应声明信封字段");
+        assertTrue(sys.contains("简短"), "系统提示应要求 reply 尽量简短");
+        assertTrue(sys.contains("元数据"), "系统提示应禁止在回复中复述元数据");
+        assertTrue(sys.contains("面向用户") && sys.contains("页面"), "应要求用面向用户、描述页面可见改动的话回复");
+        assertTrue(sys.contains("字段") && sys.contains("source_title"), "应明确禁止在回复里出现内部字段名/数据结构术语");
+        assertTrue(PromptTemplates.refineSystem("en").contains("as short as possible"), "英文提示亦应要求简短");
+        assertTrue(PromptTemplates.refineSystem("en").contains("metadata"), "英文提示应禁止在回复中复述元数据");
+        assertTrue(PromptTemplates.refineSystem("en").contains("user-facing"), "英文提示应要求面向用户的回复");
 
         String user = PromptTemplates.refineUser("{\"meta\":{\"title\":\"x\"}}", "把 S2 改得更紧张");
         assertTrue(user.contains(PromptTemplates.REFINE_SCREENPLAY_MARKER), "应含剧本标记");
         assertTrue(user.contains(PromptTemplates.REFINE_INSTRUCTION_MARKER), "应含指令标记");
         assertTrue(user.contains("把 S2 改得更紧张"), "应内联用户指令");
+        assertTrue(user.contains("\"title\":\"x\""), "应内联剧本 JSON");
+    }
+
+    @Test
+    void evaluatePromptsIsolateContextAndCarryMarkers() {
+        String sys = PromptTemplates.evaluateSystem("zh");
+        assertTrue(sys.contains("score") && sys.contains("assessment") && sys.contains("suggestions"),
+                "系统提示应声明评测信封字段");
+        assertTrue(sys.contains("只依据") || sys.contains("不要使用外部"), "中文提示应强调隔离上下文");
+        assertTrue(PromptTemplates.evaluateSystem("en").contains("SOLELY"), "英文提示应强调仅依据所给文本");
+
+        String user = PromptTemplates.evaluateUser("{\"meta\":{\"title\":\"x\"}}", "原著正文……");
+        assertTrue(user.contains(PromptTemplates.EVAL_NOVEL_MARKER), "应含原著标记");
+        assertTrue(user.contains(PromptTemplates.EVAL_SCREENPLAY_MARKER), "应含剧本标记");
+        assertTrue(user.contains("原著正文……"), "应内联原著");
         assertTrue(user.contains("\"title\":\"x\""), "应内联剧本 JSON");
     }
 }

@@ -38,7 +38,20 @@ export function createSession({ sampleId, text, language, title, requirements } 
  * @param {string} [p.language] 语言
  */
 export function chatRefine({ screenplay, message, history, language } = {}) {
-  return http.post('/chat', { screenplay, message, history, language }).then((r) => r.data)
+  // 大剧本的整本改写较慢（单次可达 ~80s），且后端遇瞬时错误会重试一次，故放宽到 300s。
+  return http.post('/chat', { screenplay, message, history, language }, { timeout: 300000 }).then((r) => r.data)
+}
+
+/**
+ * AI 质量评测：把当前剧本发给后端，后端按 sessionId 取原著、在隔离上下文下交给 AI
+ * 评判改编质量，返回 { score, assessment, suggestions, ai_evaluated }。
+ * @param {object} p
+ * @param {string} p.sessionId 会话 id（后端据此取原著原文）
+ * @param {object} p.screenplay 当前工作区剧本（snake_case 对象）
+ * @param {string} [p.language] 语言
+ */
+export function evaluateQuality({ sessionId, screenplay, language } = {}) {
+  return http.post(`/evaluate/${sessionId}`, { screenplay, language }).then((r) => r.data)
 }
 
 /** SSE 流地址（交给 EventSource / openGeneration 使用，走 Vite 代理）。 */

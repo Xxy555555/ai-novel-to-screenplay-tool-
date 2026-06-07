@@ -3,10 +3,12 @@ import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick } from 'v
 import { useRouter } from 'vue-router'
 import jsyaml from 'js-yaml'
 import { useAppStore } from '@/stores/app'
-import { fetchScreenplay, validateYaml, chatRefine } from '@/api/http'
+import { useChatStore } from '@/stores/chat'
+import { fetchScreenplay, validateYaml, chatRefine, evaluateQuality } from '@/api/http'
 
 const router = useRouter()
 const store = useAppStore()
+const chat = useChatStore()
 
 const TYPE_LABEL = { action: '动作', dialogue: '对白', voiceover: '画外音 V.O.', transition: '转场', montage: '蒙太奇' }
 const TYPE_VAR = { action: 'el-action', dialogue: 'el-dialogue', voiceover: 'el-voiceover', transition: 'el-transition', montage: 'el-montage' }
@@ -14,6 +16,7 @@ const EL_TYPES = ['action', 'dialogue', 'voiceover', 'transition', 'montage']
 
 const data = ref(null) // 响应式剧本（后端 snake_case 形状）
 const viewMode = ref('cards') // cards | yaml
+const yamlScope = ref('scene') // scene（仅当前场景，默认）| full（完整剧本）
 const yamlText = ref('')
 const selScene = ref('')
 const activeTab = ref('char') // char | qual | chat
@@ -27,11 +30,16 @@ const modelOpen = ref(false)
 const leftOpen = ref(false) // 窄屏：场景大纲抽屉
 const rightOpen = ref(false) // 窄屏：角色/质量抽屉
 
-// ───────── AI 多轮对话精修 ─────────
-const chatMessages = ref([]) // { role:'user'|'assistant', content, seed? }
+// ───────── AI 多轮对话精修（多线程历史） ─────────
+const chatMessages = computed(() => chat.messages) // 当前线程消息
 const chatInput = ref('')
 const chatBusy = ref(false)
 const chatScroll = ref(null)
+const threadsOpen = ref(false) // 历史线程列表展开
+
+// ───────── AI 质量评测 ─────────
+const evalBusy = ref(false)
+const evalResult = ref(null) // { score, assessment, suggestions, ai_evaluated }
 
 // ───────── 载入 ─────────
 onMounted(async () => {
@@ -49,12 +57,13 @@ onMounted(async () => {
   }
   data.value = reactive(normalize(sp))
   selScene.value = data.value.scenes[0]?.id || ''
-  seedChat()
+  chat.loadThreads(store.sessionId) // 按会话载入历史对话（无则建空线程）
+  seedChatIfEmpty()
   document.addEventListener('click', onDocClick)
 })
 
-// 对话开场白：介绍能力，并在用户上传时填过需求时回显之。
-function seedChat() {
+// 开场白文案：介绍能力，并在用户上传时填过需求时回显之。
+function buildHello() {
   const req = store.source?.requirements
   let hello = '你好！我是剧本精修助手。直接用自然语言告诉我想怎么改，例如：'
     + '「把 S2 改得更紧张」「给主角加一句画外音」「标题改为《活着》」「删除 S4」。'
@@ -62,7 +71,29 @@ function seedChat() {
   if (req && req.trim()) {
     hello = '已收到你在上传时填写的改编需求：「' + req.trim() + '」。\n\n' + hello
   }
-  chatMessages.value = [{ role: 'assistant', content: hello, seed: true }]
+  return hello
+}
+// 当前线程为空时注入开场白（不每次 mount 清空，保留历史）。
+function seedChatIfEmpty() {
+  if (chat.messages.length === 0) chat.appendMessage('assistant', buildHello(), true)
+}
+// ── 历史线程操作 ──
+function onNewThread() {
+  chat.newThread()
+  seedChatIfEmpty()
+  threadsOpen.value = false
+  chatScrollToBottom()
+}
+function onSwitchThread(id) {
+  chat.switchThread(id)
+  seedChatIfEmpty()
+  threadsOpen.value = false
+  chatScrollToBottom()
+}
+function onDeleteThread(id) {
+  chat.deleteThread(id)
+  seedChatIfEmpty()
+  chatScrollToBottom()
 }
 onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
 
@@ -135,9 +166,15 @@ function switchView(v) {
   viewMode.value = v
   if (v === 'yaml') syncYamlFromModel()
 }
+// 切换 YAML 显示范围（当前场景 / 完整剧本）并立即重新序列化。
+function setYamlScope(v) {
+  yamlScope.value = v
+  if (viewMode.value === 'yaml') syncYamlFromModel()
+}
 function syncYamlFromModel() {
   try {
-    yamlText.value = jsyaml.dump(plainScreenplay(), { indent: 2, lineWidth: -1, noRefs: true, skipInvalid: true })
+    const src = yamlScope.value === 'scene' ? plainCurrentScene() : plainScreenplay()
+    yamlText.value = jsyaml.dump(src, { indent: 2, lineWidth: -1, noRefs: true, skipInvalid: true })
   } catch (e) {
     yamlText.value = '# 序列化失败：' + e.message
   }
@@ -145,26 +182,47 @@ function syncYamlFromModel() {
 function plainScreenplay() {
   return JSON.parse(JSON.stringify(data.value))
 }
+// 当前选中场景的纯对象（YAML「仅当前场景」范围用）。
+function plainCurrentScene() {
+  return curScene.value ? JSON.parse(JSON.stringify(curScene.value)) : {}
+}
 let yTimer = null
 function onYamlInput() {
   clearTimeout(yTimer)
   yTimer = setTimeout(() => {
     try {
       const obj = jsyaml.load(yamlText.value)
-      if (obj && typeof obj === 'object') {
+      if (!obj || typeof obj !== 'object') {
+        setValid(false)
+        return
+      }
+      if (yamlScope.value === 'scene') {
+        applySceneYaml(obj)
+      } else {
         if (obj.meta) data.value.meta = obj.meta
         if (obj.characters) data.value.characters = obj.characters
         if (Array.isArray(obj.scenes)) data.value.scenes = normalize({ scenes: obj.scenes }).scenes
         if (obj.report) data.value.report = obj.report
         if (!data.value.scenes.find((s) => s.id === selScene.value)) selScene.value = data.value.scenes[0]?.id || ''
         setValid(true)
-      } else {
-        setValid(false)
       }
     } catch (e) {
       setValid(false)
     }
   }, 380)
+}
+// 「仅当前场景」模式下，把编辑后的单场景对象回写到对应位置（按选中项定位，跟随 id 改名）。
+function applySceneYaml(obj) {
+  const idx = data.value.scenes.findIndex((s) => s.id === selScene.value)
+  if (idx < 0) {
+    setValid(false)
+    return
+  }
+  if (!obj.id) obj.id = selScene.value // 用户删了 id 时沿用原 id
+  const normScene = normalize({ scenes: [obj] }).scenes[0]
+  data.value.scenes.splice(idx, 1, normScene)
+  if (normScene.id !== selScene.value) selScene.value = normScene.id // 跟随场景改名
+  setValid(true)
 }
 function setValid(ok) {
   valid.value = ok
@@ -220,6 +278,8 @@ function goHome() {
 function selectScene(id) {
   selScene.value = id
   dimChar.value = ''
+  // YAML「仅当前场景」模式：切场景时同步显示新场景的 YAML。
+  if (viewMode.value === 'yaml' && yamlScope.value === 'scene') syncYamlFromModel()
   if (window.innerWidth <= 900) leftOpen.value = false
   nextTick(() => {
     const c = document.querySelector('.center')
@@ -250,7 +310,9 @@ function locate(sceneId) {
 // ───────── 重校验 ─────────
 async function revalidate() {
   try {
-    const yaml = viewMode.value === 'yaml' ? yamlText.value : jsyaml.dump(plainScreenplay(), { indent: 2, lineWidth: -1, noRefs: true, skipInvalid: true })
+    // 「仅当前场景」时 yamlText 只含单场景，重校验须用模型里的完整剧本（编辑已回写）。
+    const useRaw = viewMode.value === 'yaml' && yamlScope.value === 'full'
+    const yaml = useRaw ? yamlText.value : jsyaml.dump(plainScreenplay(), { indent: 2, lineWidth: -1, noRefs: true, skipInvalid: true })
     const r = await validateYaml(yaml)
     setValid(r.valid)
     if (r.report) data.value.report = r.report
@@ -270,11 +332,11 @@ function chatScrollToBottom() {
 async function sendChat() {
   const msg = chatInput.value.trim()
   if (!msg || chatBusy.value) return
-  // 历史 = 已有真实对话（排除开场白 seed），不含本轮。
-  const history = chatMessages.value
+  // 历史 = 当前线程已有真实对话（排除开场白 seed），不含本轮。
+  const history = chat.messages
     .filter((m) => !m.seed)
     .map((m) => ({ role: m.role, content: m.content }))
-  chatMessages.value.push({ role: 'user', content: msg })
+  chat.appendMessage('user', msg)
   chatInput.value = ''
   chatBusy.value = true
   chatScrollToBottom()
@@ -285,21 +347,51 @@ async function sendChat() {
       history,
       language: store.source?.language || 'auto',
     })
-    chatMessages.value.push({ role: 'assistant', content: resp.reply || '（无回复）' })
+    chat.appendMessage('assistant', resp.reply || '（无回复）')
     if (resp.changed && resp.screenplay) {
       applyRefined(resp.screenplay)
       setValid(resp.valid !== false)
-      toast('AI 已更新剧本' + (resp.valid === false ? '（仍有校验问题）' : ' · Schema 合法'))
+      toast('AI 已更新剧本' + (resp.valid === false ? '（仍有校验问题）' : ' · 已同步到卡片/YAML'))
+    } else {
+      toast('AI 未对剧本做改动')
     }
   } catch (e) {
     const m = e.response?.data?.message || e.message || '对话失败'
-    chatMessages.value.push({ role: 'assistant', content: '出错了：' + m })
+    chat.appendMessage('assistant', '出错了：' + m)
     toast('对话失败：' + m)
   } finally {
     chatBusy.value = false
     chatScrollToBottom()
   }
 }
+// ───────── AI 质量评测：剧本 + 原著隔离评判 ─────────
+const aeScoreColor = computed(() => {
+  const s = evalResult.value?.score ?? 0
+  return s >= 80 ? 'var(--success)' : s >= 60 ? 'var(--accent)' : 'var(--danger)'
+})
+async function runEval() {
+  if (evalBusy.value) return
+  if (!store.sessionId) {
+    toast('当前会话缺少原著文本，请重新生成后再评测')
+    return
+  }
+  evalBusy.value = true
+  try {
+    const r = await evaluateQuality({
+      sessionId: store.sessionId,
+      screenplay: plainScreenplay(),
+      language: store.source?.language || 'auto',
+    })
+    evalResult.value = r
+    toast('AI 评测完成 · ' + (r.ai_evaluated ? 'AI 评判' : '离线规则评估'))
+  } catch (e) {
+    const m = e.response?.data?.message || e.message || '评测失败'
+    toast('评测失败：' + m)
+  } finally {
+    evalBusy.value = false
+  }
+}
+
 // 用 AI 返回的剧本替换工作区，并保持选中场景与视图同步。
 function applyRefined(sp) {
   const keep = selScene.value
@@ -593,9 +685,13 @@ function onDocClick(e) {
         <!-- YAML -->
         <div class="yaml-wrap" v-show="viewMode === 'yaml'">
           <div class="yaml-bar">
+            <div class="yscope" role="group" aria-label="YAML 显示范围">
+              <button :class="{ on: yamlScope === 'scene' }" @click="setYamlScope('scene')">当前场景<span v-if="curScene" class="sc">{{ curScene.id }}</span></button>
+              <button :class="{ on: yamlScope === 'full' }" @click="setYamlScope('full')">完整剧本</button>
+            </div>
             <span class="vstat" :class="valid ? 'ok' : 'bad'">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3"><path v-if="valid" d="M20 6L9 17l-5-5" /><path v-else d="M12 8v5M12 17h.01M10.3 3.9L2 18a2 2 0 001.7 3h16.6a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z" /></svg>
-              {{ valid ? 'Schema 合法' : '解析失败 · 检查缩进/格式' }}
+              {{ valid ? (yamlScope === 'scene' ? '已同步 · 当前场景' : 'Schema 合法') : '解析失败 · 检查缩进/格式' }}
             </span>
             <span class="sp"></span>
             <button @click="revalidate">重校验</button>
@@ -660,9 +756,50 @@ function onDocClick(e) {
               <button v-if="it.scene_id" class="loc" @click="locate(it.scene_id)">定位</button>
             </div>
           </div>
+
+          <!-- AI 改编评测：剧本 + 原著隔离评判 -->
+          <div class="ai-eval">
+            <div class="ae-head">
+              <h5>AI 改编评测</h5>
+              <button class="ae-run" :disabled="evalBusy" @click="runEval">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l1.9 5.8L20 9l-5 3.6L16.8 19 12 15.4 7.2 19 9 12.6 4 9l6.1-.2z" /></svg>
+                {{ evalBusy ? '评测中…' : (evalResult ? '重新评测' : '开始评测') }}
+              </button>
+            </div>
+            <p class="ae-tip" v-if="!evalResult && !evalBusy">把当前剧本与原著一起交给 AI（隔离其它上下文），分析改编质量并给出修改建议。</p>
+            <div class="ae-result" v-if="evalResult">
+              <div class="ae-top">
+                <div class="ae-score" :style="{ color: aeScoreColor }">{{ evalResult.score }}<small>/100</small></div>
+                <span class="ae-badge" :class="{ rule: !evalResult.ai_evaluated }">{{ evalResult.ai_evaluated ? 'AI 评判' : '离线规则评估' }}</span>
+              </div>
+              <p class="ae-assess">{{ evalResult.assessment }}</p>
+              <h6 v-if="evalResult.suggestions && evalResult.suggestions.length">修改建议</h6>
+              <ul class="ae-sugg">
+                <li v-for="(s, i) in evalResult.suggestions" :key="i">{{ s }}</li>
+              </ul>
+            </div>
+          </div>
         </div>
 
         <div class="tabpane chat" v-show="activeTab === 'chat'">
+          <div class="chat-head">
+            <button class="th-toggle" :class="{ open: threadsOpen }" @click="threadsOpen = !threadsOpen" title="历史对话">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" /></svg>
+              历史对话 <b>{{ chat.threads.length }}</b>
+              <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6" /></svg>
+            </button>
+            <button class="th-new" @click="onNewThread" title="新建对话">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14" /></svg>新对话
+            </button>
+          </div>
+          <div class="thread-list" v-if="threadsOpen">
+            <div v-for="t in chat.threads" :key="t.id" class="thread" :class="{ on: t.id === chat.activeThreadId }" @click="onSwitchThread(t.id)">
+              <span class="t-title">{{ t.title || '新对话' }}</span>
+              <button class="t-del" @click.stop="onDeleteThread(t.id)" title="删除对话">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12" /></svg>
+              </button>
+            </div>
+          </div>
           <div class="chat-msgs" ref="chatScroll">
             <div v-for="(m, i) in chatMessages" :key="i" class="cmsg" :class="m.role">
               <span class="who" v-if="m.role === 'assistant'">AI</span>
@@ -769,7 +906,8 @@ button { font: inherit; cursor: pointer; }
 .char-list,
 .chat-msgs,
 .tabpane.qual,
-.script-page {
+.script-page,
+.thread-list {
   scrollbar-width: thin;
   scrollbar-color: var(--border-strong) transparent;
 }
@@ -887,6 +1025,10 @@ button { font: inherit; cursor: pointer; }
 /* YAML view */
 .yaml-wrap { display: flex; flex-direction: column; min-height: 0; flex: 1; }
 .yaml-bar { display: flex; align-items: center; gap: 10px; padding: 9px 16px; border-bottom: 1px solid var(--border); background: var(--bg); font-size: 12px; color: var(--muted); }
+.yaml-bar .yscope { display: inline-flex; background: var(--raised); border: 1px solid var(--border); border-radius: 7px; padding: 2px; }
+.yaml-bar .yscope button { display: inline-flex; align-items: center; gap: 5px; background: none; border: none; color: var(--text-2); padding: 4px 10px; border-radius: 5px; font-size: 12px; }
+.yaml-bar .yscope button.on { background: var(--accent); color: #0e1116; font-weight: 600; }
+.yaml-bar .yscope button .sc { font-family: var(--mono); font-size: 10px; opacity: 0.85; }
 .yaml-bar .vstat { display: inline-flex; align-items: center; gap: 6px; }
 .yaml-bar .vstat.ok { color: var(--success); }
 .yaml-bar .vstat.bad { color: var(--danger); }
@@ -944,8 +1086,46 @@ button { font: inherit; cursor: pointer; }
 .qtodo .ti .loc { margin-left: auto; background: var(--raised); border: 1px solid var(--border); color: var(--accent); border-radius: 6px; padding: 3px 10px; font-size: 11px; }
 .qtodo .ti .loc:hover { border-color: var(--accent); }
 
+/* AI 改编评测 */
+.ai-eval { border-top: 1px solid var(--border); margin-top: 14px; padding-top: 13px; }
+.ai-eval .ae-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.ai-eval .ae-head h5 { font-size: 12px; color: var(--text-2); text-transform: uppercase; letter-spacing: 0.08em; }
+.ai-eval .ae-run { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; background: var(--accent); color: #0e1116; border: none; border-radius: 8px; padding: 7px 12px; font-size: 12.5px; font-weight: 600; }
+.ai-eval .ae-run:hover { background: var(--accent-hover); }
+.ai-eval .ae-run:disabled { background: var(--raised); color: var(--muted); cursor: not-allowed; }
+.ai-eval .ae-run svg { width: 14px; height: 14px; }
+.ai-eval .ae-tip { font-size: 12px; color: var(--muted); line-height: 1.6; }
+.ai-eval .ae-top { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.ai-eval .ae-score { font-family: var(--mono); font-size: 30px; font-weight: 600; line-height: 1; }
+.ai-eval .ae-score small { font-size: 12px; color: var(--muted); margin-left: 2px; }
+.ai-eval .ae-badge { font-size: 11px; color: var(--success); background: rgba(63, 185, 80, 0.1); border: 1px solid rgba(63, 185, 80, 0.3); border-radius: 999px; padding: 2px 9px; }
+.ai-eval .ae-badge.rule { color: var(--text-2); background: var(--inset); border-color: var(--border); }
+.ai-eval .ae-assess { font-size: 13px; color: var(--text); line-height: 1.7; margin-bottom: 10px; white-space: pre-wrap; }
+.ai-eval h6 { font-size: 12px; color: var(--text-2); margin-bottom: 7px; }
+.ai-eval .ae-sugg { list-style: none; display: flex; flex-direction: column; gap: 7px; }
+.ai-eval .ae-sugg li { position: relative; font-size: 13px; color: var(--text-2); line-height: 1.6; padding-left: 16px; }
+.ai-eval .ae-sugg li::before { content: '·'; position: absolute; left: 4px; color: var(--accent); font-weight: 700; }
+
 /* AI 对话 */
 .tabpane.chat { display: flex; flex-direction: column; flex: 1; overflow: hidden; padding: 12px; }
+.chat-head { display: flex; align-items: center; gap: 8px; padding-bottom: 10px; border-bottom: 1px solid var(--border); flex: none; }
+.chat-head .th-toggle { display: inline-flex; align-items: center; gap: 6px; flex: 1; background: var(--raised); border: 1px solid var(--border); color: var(--text-2); border-radius: 8px; padding: 7px 10px; font-size: 12.5px; }
+.chat-head .th-toggle:hover { border-color: var(--border-strong); color: var(--text); }
+.chat-head .th-toggle b { color: var(--accent); font-family: var(--mono); font-size: 11px; }
+.chat-head .th-toggle svg { width: 14px; height: 14px; }
+.chat-head .th-toggle .chev { margin-left: auto; transition: 0.18s; }
+.chat-head .th-toggle.open .chev { transform: rotate(180deg); }
+.chat-head .th-new { display: inline-flex; align-items: center; gap: 5px; background: var(--accent-soft); border: 1px solid rgba(232, 179, 73, 0.3); color: var(--accent); border-radius: 8px; padding: 7px 11px; font-size: 12.5px; white-space: nowrap; }
+.chat-head .th-new:hover { border-color: var(--accent); }
+.chat-head .th-new svg { width: 14px; height: 14px; }
+.thread-list { flex: none; max-height: 180px; overflow-y: auto; margin: 8px 0 2px; display: flex; flex-direction: column; gap: 4px; }
+.thread { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--raised); cursor: pointer; transition: 0.12s; }
+.thread:hover { border-color: var(--border-strong); }
+.thread.on { border-color: var(--accent); background: var(--accent-soft); }
+.thread .t-title { flex: 1; font-size: 13px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.thread .t-del { flex: none; width: 22px; height: 22px; display: grid; place-items: center; background: none; border: none; color: var(--muted); border-radius: 5px; }
+.thread .t-del:hover { background: var(--inset); color: var(--danger); }
+.thread .t-del svg { width: 13px; height: 13px; }
 .chat-msgs { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding: 2px 2px 8px; }
 .cmsg { display: flex; flex-direction: column; max-width: 92%; }
 .cmsg.user { align-self: flex-end; align-items: flex-end; }

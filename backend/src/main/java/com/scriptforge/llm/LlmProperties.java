@@ -23,14 +23,14 @@ public class LlmProperties {
     private String model = "gpt-4o-mini";
     /** 采样温度（仅 openai 兼容端点使用；claude opus 4.7/4.8 不接受该参数）。 */
     private double temperature = 0.4;
-    /** 请求超时（秒）。 */
-    private int timeoutSeconds = 120;
+    /** 请求超时（秒）。大剧本整本改写单次可达 ~110s，故默认放宽到 180s。 */
+    private int timeoutSeconds = 180;
     /** 分块大小（字符数），用于超长文本切块。 */
     private int chunkSize = 3500;
     /** Schema 不合法时回喂模型修复的最大重试次数。 */
     private int maxRepairRetries = 2;
-    /** 单次补全的最大输出 token（claude 必填；openai 作上限）。 */
-    private int maxTokens = 4096;
+    /** 单次补全的最大输出 token（claude 必填；openai 作上限）。精修需回吐完整剧本，故默认放宽到 16384 防截断。 */
+    private int maxTokens = 16384;
 
     public String getProvider() { return provider; }
     public void setProvider(String provider) { this.provider = provider; }
