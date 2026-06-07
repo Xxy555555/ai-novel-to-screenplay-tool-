@@ -10,6 +10,9 @@ import org.springframework.http.MediaType;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -19,6 +22,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
  * 换模型只需改 {@code base-url + model + api-key} 三个配置（PRD 6.4）。
  */
 public class OpenAiCompatibleClient implements LlmClient {
+
+    private static final Logger log = LoggerFactory.getLogger(OpenAiCompatibleClient.class);
+    /** 瞬时错误（网关 5xx / 大慢响应提取失败 / 读超时）时的总尝试次数。 */
+    private static final int MAX_ATTEMPTS = 2;
 
     private final LlmProperties props;
     private final ObjectMapper mapper = new ObjectMapper();
@@ -80,22 +87,28 @@ public class OpenAiCompatibleClient implements LlmClient {
         body.put("temperature", props.getTemperature());
         body.put("max_tokens", props.getMaxTokens());
 
-        try {
-            // 按原始字节取响应再自行 UTF-8 解码：绕开 content-type 转换器匹配，
-            // 兼容上游把 JSON 响应头误标为 application/octet-stream 的情况（聚合网关偶发）。
-            byte[] raw = http.post()
-                    .uri(props.getBaseUrl() + "/chat/completions")
-                    .header("Authorization", "Bearer " + props.getApiKey())
-                    .accept(MediaType.APPLICATION_JSON)
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .body(body)
-                    .retrieve()
-                    .body(byte[].class);
-            String resp = raw == null ? "" : new String(raw, StandardCharsets.UTF_8);
-            JsonNode node = mapper.readTree(resp);
-            return node.path("choices").path(0).path("message").path("content").asText("");
-        } catch (Exception e) {
-            throw new RuntimeException("OpenAI 兼容端点调用失败（" + props.getBaseUrl() + "）：" + e.getMessage(), e);
+        // 大/慢响应时聚合网关偶发瞬时错误（5xx、提取失败、读超时）——重试若干次。
+        RuntimeException last = null;
+        for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+            try {
+                // 按原始字节取响应再自行 UTF-8 解码：绕开 content-type 转换器匹配，
+                // 兼容上游把 JSON 响应头误标为 application/octet-stream 的情况（聚合网关偶发）。
+                byte[] raw = http.post()
+                        .uri(props.getBaseUrl() + "/chat/completions")
+                        .header("Authorization", "Bearer " + props.getApiKey())
+                        .accept(MediaType.APPLICATION_JSON)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body(body)
+                        .retrieve()
+                        .body(byte[].class);
+                String resp = raw == null ? "" : new String(raw, StandardCharsets.UTF_8);
+                JsonNode node = mapper.readTree(resp);
+                return node.path("choices").path(0).path("message").path("content").asText("");
+            } catch (Exception e) {
+                last = new RuntimeException("OpenAI 兼容端点调用失败（" + props.getBaseUrl() + "）：" + e.getMessage(), e);
+                log.warn("LLM 调用失败（第 {}/{} 次）：{}", attempt, MAX_ATTEMPTS, e.getMessage());
+            }
         }
+        throw last;
     }
 }
