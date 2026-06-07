@@ -26,6 +26,7 @@
 | R5 | PR3：`OpenAiCompatibleClient` 容忍上游 `application/octet-stream` 响应（改按 byte[] 取响应再 UTF-8 解码） | `feat/chat-03-concise-sync` | ✅ 已完成（TDD 先红后绿 + 真实模型实测） |
 | R6 | PR3：全局改写类指令仍偶发「未能解析」——解析失败自动重试一次（追加纠正指令）+ `max-tokens` 8192→16384 防截断 | `feat/chat-03-concise-sync` | ✅ 已完成（TDD 先红后绿 + 真实模型实测） |
 | R7 | PR3：**大剧本**（长篇小说生成）对话仍失败——LLM 调用瞬时错误自动重试 + 对话超时 180s/300s | `feat/chat-03-concise-sync` | ✅ 已完成（TDD 先红后绿 + 真实模型实测 3/3） |
+| R8 | PR3：回复改为**面向用户**（只说页面可见改动、禁内部字段名）+ 无实际改动时**如实告知**不沿用模型过度声称 | `feat/chat-03-concise-sync` | ✅ 已完成（TDD 先红后绿 + 真实模型实测） |
 
 > R1 走标准 TDD（PromptTemplatesTest 先加「元数据/metadata」禁令断言→红→补提示→绿）；R2 由既有组件用例覆盖（对话后 `.atag.mood` 更新）；R3 为纯 CSS，单测无法可靠断言（已实测 happy-dom 不计算 scoped 样式），以 `e2e/tests/scroll-and-home.spec.js` 真实浏览器先红（整页 scrollHeight 1051 > 视口 722）后绿验证。
 >
@@ -38,6 +39,8 @@
 > R7 复盘（上传长篇小说《重生都市至尊》后对话失败）：先确诊——真实跑通「生成→对话」，量得剧本 **10 场景 / 16k 字符**；整本改写 `in=16476 / out=22295` 字符、`finish_reason=stop`（**未截断**，16384 足够）、单次耗时 **~79–110s**。失败根因是 agnes 网关在这种「大且慢」响应上**偶发瞬时错误**（5xx / 提取失败 octet-stream），而客户端**之前不重试**（仅 RefineStage 在解析失败时重试，HTTP 异常直接放弃）。修复：`OpenAiCompatibleClient` 加瞬时错误重试（2 次尝试，覆盖生成与对话）；超时 `timeout-seconds` 120→180、前端 chat 超时 180→300s。TDD：`OpenAiCompatibleClientTest` 用 `MockRestServiceServer`「首次 502、二次成功」→ 先红→加重试后绿。真实模型实测：同一大剧本连发 **3 次全局改写均成功**（HTTP 200、`changed/valid=true`、回复 55–63 字无 Schema、耗时 93–110s）。
 >
 > 备注（长期方向）：~100s 的对话等待偏久，根因是「每轮回吐整本剧本」对大剧本天然昂贵。后续可考虑**按场景增量编辑**（仅回吐改动场景、服务端合并）从架构上消除大输出，留作独立优化。
+>
+> R8 复盘（用户反馈两点）：用户「场景大纲和角色圣经使用中文」后，AI 回复「已将 meta 中的 title 和 source_title 改为中文，并将所有 scene 的 source 字段更新…」——(1) 描述的不是用户在页面上能看到的改动；(2) 满是 meta/source_title/字段 等用户看不懂的内部术语；且实际上前端可见内容并未改变（过度声称）。修复两处：① 重写 `refineSystem` 的 reply 指引（中英双语）——reply 必须简短且**面向用户**，只描述「场景大纲/场景卡片/角色圣经」里能看到的变化，**绝不出现 meta/title/source_title/source/JSON/Schema/字段** 等术语；② `RefineStage` 加**诚实性兜底**——当 `changed=false`（剧本无实际变化）时，回复固定为「本次未改动剧本的可见内容…」，不沿用模型的过度声称。TDD：`PromptTemplatesTest` 加「面向用户/页面/字段/source_title/user-facing」断言、`RefineStageTest` 加「模型对未发生改动过度声称→回复须如实告知」用例，均先红后绿。真实模型实测：已是中文的小剧本「场景大纲和角色圣经使用中文」→ `changed=false`、回复「本次未改动剧本的可见内容…」；「把标题改为《重生都市至尊》」→ `changed=true`、回复「将剧本标题修改为《重生都市至尊》。」（无字段名泄漏）。
 
 ---
 
