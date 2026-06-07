@@ -103,6 +103,28 @@ describe('WorkbenchView —— AI 多轮对话精修（Feature 1b）', () => {
     expect(w.find('.atag.mood').text()).toContain('紧张')
   })
 
+  it('YAML 视图默认「仅当前场景」，切「完整剧本」显示整部（Feature 1c）', async () => {
+    const { w } = await mountWorkbench()
+    // 切到 YAML 视图（中心工具栏第二个分段按钮）
+    await w.findAll('.ctool .seg button')[1].trigger('click')
+    await flushPromises()
+    const ta = w.find('textarea.yta')
+    expect(ta.exists()).toBe(true)
+    // 默认 scene 范围：只含当前场景，不应出现顶层 meta/scenes 键
+    expect(ta.element.value).toContain('id: S1')
+    expect(ta.element.value).not.toMatch(/^scenes:/m)
+    expect(ta.element.value).not.toMatch(/^meta:/m)
+    // 切到「完整剧本」：出现顶层 meta/scenes
+    const scopeBtns = w.findAll('.yscope button')
+    expect(scopeBtns.map((b) => b.text())).toContain('完整剧本')
+    await scopeBtns[1].trigger('click')
+    await flushPromises()
+    const full = w.find('textarea.yta').element.value
+    expect(full).toMatch(/^scenes:/m)
+    expect(full).toMatch(/^meta:/m)
+    expect(full).toContain('title: 测试剧本')
+  })
+
   it('chatRefine 出错时追加错误气泡且不崩溃', async () => {
     const { w } = await mountWorkbench()
     mockChatRefine.mockRejectedValue({ message: '网络中断' })
