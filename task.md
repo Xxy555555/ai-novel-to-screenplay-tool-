@@ -25,6 +25,7 @@
 | R4 | PR3：真实模型鲁棒性 —— 回复不漏 Schema（`sanitizeReply`）+ 防截断（max-tokens 8192）+ 解析失败友好兜底，确保改动同步 | `feat/chat-03-concise-sync` | ✅ 已完成（TDD 先红后绿 + 真实模型实测） |
 | R5 | PR3：`OpenAiCompatibleClient` 容忍上游 `application/octet-stream` 响应（改按 byte[] 取响应再 UTF-8 解码） | `feat/chat-03-concise-sync` | ✅ 已完成（TDD 先红后绿 + 真实模型实测） |
 | R6 | PR3：全局改写类指令仍偶发「未能解析」——解析失败自动重试一次（追加纠正指令）+ `max-tokens` 8192→16384 防截断 | `feat/chat-03-concise-sync` | ✅ 已完成（TDD 先红后绿 + 真实模型实测） |
+| R7 | PR3：**大剧本**（长篇小说生成）对话仍失败——LLM 调用瞬时错误自动重试 + 对话超时 180s/300s | `feat/chat-03-concise-sync` | ✅ 已完成（TDD 先红后绿 + 真实模型实测 3/3） |
 
 > R1 走标准 TDD（PromptTemplatesTest 先加「元数据/metadata」禁令断言→红→补提示→绿）；R2 由既有组件用例覆盖（对话后 `.atag.mood` 更新）；R3 为纯 CSS，单测无法可靠断言（已实测 happy-dom 不计算 scoped 样式），以 `e2e/tests/scroll-and-home.spec.js` 真实浏览器先红（整页 scrollHeight 1051 > 视口 722）后绿验证。
 >
@@ -33,6 +34,10 @@
 > R5 复盘：评审又见 `对话精修调用失败：…Error while extracting response for type [java.lang.String] and content type [application/octet-stream]`。根因——agnes 网关偶发把 JSON 响应头误标为 `application/octet-stream`，`OpenAiCompatibleClient` 用 `.body(String.class)` 找不到转换器即抛错、整个对话失败。修复：改 `.body(byte[].class)` 取原始字节再 UTF-8 解码（绕开 content-type 匹配）+ 显式 `Accept: application/json`；对正常 JSON 响应行为不变。TDD：`OpenAiCompatibleClientTest` 用 `MockRestServiceServer` 返回 octet-stream 的 JSON 体 → 先红（复现线上报错）→ 改 byte[] 后绿。真实模型实测：连发对话不再报该错，`给 S1 加一句画外音` → HTTP 200、回复 18 字无 Schema、`changed/valid=true`、新元素已进入同步后的剧本。
 >
 > R6 复盘：评审把「质量评测的修改建议」整段作为指令做**全局改写**，仍偶发 `未能解析本次返回的剧本改动`。真实模型诊断：8 场景改写 `finish_reason=stop`、约 7.6k 字符可正常解析（即当前构建已能处理），失败主因是 (1) 模型偶发不按 `{reply,screenplay}` 信封返回（散文/markdown），(2) 更大剧本输出被 token 上限截断。修复：`RefineStage` 抽出 `parseEnvelope`，首次解析不到剧本时**追加「只输出严格 JSON 信封」纠正指令自动重试一次**；`max-tokens` 8192→16384（已实测 agnes 接受、`finish_reason=stop`）。TDD：RefineStageTest 加「首次回散文、纠正后回合法信封→应重试并成功且恰好两次调用」用例→红→实现重试后绿。真实模型实测：8 场景全局改写 → HTTP 200、`changed/valid=true`、回复 59 字无 Schema、8 场景齐全。
+>
+> R7 复盘（上传长篇小说《重生都市至尊》后对话失败）：先确诊——真实跑通「生成→对话」，量得剧本 **10 场景 / 16k 字符**；整本改写 `in=16476 / out=22295` 字符、`finish_reason=stop`（**未截断**，16384 足够）、单次耗时 **~79–110s**。失败根因是 agnes 网关在这种「大且慢」响应上**偶发瞬时错误**（5xx / 提取失败 octet-stream），而客户端**之前不重试**（仅 RefineStage 在解析失败时重试，HTTP 异常直接放弃）。修复：`OpenAiCompatibleClient` 加瞬时错误重试（2 次尝试，覆盖生成与对话）；超时 `timeout-seconds` 120→180、前端 chat 超时 180→300s。TDD：`OpenAiCompatibleClientTest` 用 `MockRestServiceServer`「首次 502、二次成功」→ 先红→加重试后绿。真实模型实测：同一大剧本连发 **3 次全局改写均成功**（HTTP 200、`changed/valid=true`、回复 55–63 字无 Schema、耗时 93–110s）。
+>
+> 备注（长期方向）：~100s 的对话等待偏久，根因是「每轮回吐整本剧本」对大剧本天然昂贵。后续可考虑**按场景增量编辑**（仅回吐改动场景、服务端合并）从架构上消除大输出，留作独立优化。
 
 ---
 
