@@ -119,19 +119,43 @@ class RefineStageTest {
         assertFalse(r.reply().isBlank());
     }
 
-    /** 用一个固定返回 {@code raw} 的假 LLM 构造 RefineStage，模拟真实模型的各种返回形态。 */
-    private RefineStage refineReturning(String raw) {
+    /** 用指定的假 LLM 构造 RefineStage。 */
+    private RefineStage newRefineWith(LlmClient llm) {
         LlmProperties props = new LlmProperties();
         StubLlmClient stub = new StubLlmClient(props);
         SchemaValidator validator = new SchemaValidator();
         AutoRepair repair = new AutoRepair(validator, stub, props);
         QualityReporter quality = new QualityReporter();
-        LlmClient fake = new LlmClient() {
+        return new RefineStage(llm, repair, quality, validator);
+    }
+
+    /** 固定返回 {@code raw} 的假 LLM（每次调用都一样）。 */
+    private RefineStage refineReturning(String raw) {
+        return newRefineWith(new LlmClient() {
             @Override public String complete(String s, String u) { return raw; }
             @Override public String describe() { return "fake"; }
             @Override public String chat(String s, List<LlmClient.ChatMessage> m) { return raw; }
+        });
+    }
+
+    @Test
+    void retriesOnceWhenFirstOutputIsUnparseable() {
+        // 真实模型偶发：第一次回散文（无信封），纠正后第二次回合法信封。
+        String[] outs = {
+                "你好，我理解你的需求是重写所有场景。让我想想该怎么改……（这里没有按要求输出 JSON）",
+                "{\"reply\":\"已重写所有场景\",\"screenplay\":" + VALID_SP + "}",
         };
-        return new RefineStage(fake, repair, quality, validator);
+        int[] n = {0};
+        LlmClient flaky = new LlmClient() {
+            @Override public String complete(String s, String u) { return next(); }
+            @Override public String describe() { return "flaky"; }
+            @Override public String chat(String s, List<LlmClient.ChatMessage> m) { return next(); }
+            private String next() { return outs[Math.min(n[0]++, outs.length - 1)]; }
+        };
+        RefineStage.RefineResult r = newRefineWith(flaky).refine(baseScreenplay(), "重写所有场景", List.of(), "zh");
+        assertTrue(r.changed(), "纠正重试后应成功解析并改动");
+        assertEquals("群山回唱", r.screenplay().meta().title());
+        assertEquals(2, n[0], "应恰好调用模型两次（首次 + 一次重试）");
     }
 
     private static final String VALID_SP =

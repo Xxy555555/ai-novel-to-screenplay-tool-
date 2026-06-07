@@ -35,9 +35,9 @@ scriptforge:
     timeout-seconds: 120
     chunk-size: 3500
     max-repair-retries: 2
-    # 精修要求模型回吐「完整剧本」，4096 token 易截断导致 JSON 不完整 → 无法同步；
-    # 提到 8192 并允许按需用 SCRIPTFORGE_LLM_MAX_TOKENS 覆盖。
-    max-tokens: ${SCRIPTFORGE_LLM_MAX_TOKENS:8192}
+    # 精修要求模型回吐「完整剧本」，token 太小会截断导致 JSON 不完整 → 无法同步；
+    # 放宽到 16384 给较大剧本留足空间，并允许按需用 SCRIPTFORGE_LLM_MAX_TOKENS 覆盖。
+    max-tokens: ${SCRIPTFORGE_LLM_MAX_TOKENS:16384}
 
 logging:
   level:

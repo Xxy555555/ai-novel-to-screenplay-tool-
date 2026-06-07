@@ -100,21 +100,24 @@ public class RefineStage {
         }
 
         // 解析 {"reply","screenplay"} 信封；容错：模型可能直接回裸剧本对象。
-        String reply = null;
-        Screenplay refined = null;
-        try {
-            JsonNode root = json.readTree(extractJson(raw));
-            if (root.has("reply")) {
-                reply = root.get("reply").asText();
+        Parsed p = parseEnvelope(raw);
+        // 模型偶发不按信封返回（散文 / markdown / 截断）—— 追加纠正指令、重试一次。
+        if (p.refined() == null) {
+            List<LlmClient.ChatMessage> retry = new ArrayList<>(msgs);
+            retry.add(new LlmClient.ChatMessage("user",
+                    "上一次没有按要求返回。请严格只输出 JSON 信封：{\"reply\":\"…\",\"screenplay\":{…完整剧本…}}，"
+                            + "不要任何解释、不要 markdown 代码块。"));
+            try {
+                Parsed p2 = parseEnvelope(llm.chat(sys, retry));
+                if (p2.refined() != null) {
+                    p = p2;
+                }
+            } catch (Exception e) {
+                log.warn("对话精修重试调用失败：{}", e.getMessage());
             }
-            JsonNode spNode = root.has("screenplay") ? root.get("screenplay")
-                    : (root.has("scenes") || root.has("meta") ? root : null);
-            if (spNode != null && spNode.isObject()) {
-                refined = json.treeToValue(spNode, Screenplay.class);
-            }
-        } catch (Exception e) {
-            log.warn("对话精修输出解析失败：{}", e.getMessage());
         }
+        String reply = p.reply();
+        Screenplay refined = p.refined();
 
         if (refined == null) {
             // 解析不到剧本：绝不把原始输出（可能含 Schema/JSON 转储或被截断的内容）回灌给用户。
@@ -137,6 +140,29 @@ public class RefineStage {
         String r = note != null && !note.isBlank() ? note
                 : (changed ? "已根据你的指令更新剧本。" : "剧本未发生变化。");
         return new RefineResult(r, withReport, changed, ro.errorCount(), errors);
+    }
+
+    /** 解析后的信封：自然语言回复 + 剧本（解析不到时 refined 为 null）。 */
+    private record Parsed(String reply, Screenplay refined) {}
+
+    /** 从模型原始输出解析 {@code {"reply","screenplay"}} 信封；容错裸剧本对象、markdown 围栏与散文包裹。 */
+    private Parsed parseEnvelope(String raw) {
+        String reply = null;
+        Screenplay refined = null;
+        try {
+            JsonNode root = json.readTree(extractJson(raw));
+            if (root.has("reply")) {
+                reply = root.get("reply").asText();
+            }
+            JsonNode spNode = root.has("screenplay") ? root.get("screenplay")
+                    : (root.has("scenes") || root.has("meta") ? root : null);
+            if (spNode != null && spNode.isObject()) {
+                refined = json.treeToValue(spNode, Screenplay.class);
+            }
+        } catch (Exception e) {
+            log.warn("对话精修输出解析失败：{}", e.getMessage());
+        }
+        return new Parsed(reply, refined);
     }
 
     private RefineResult unchanged(Screenplay sp, String reply) {
