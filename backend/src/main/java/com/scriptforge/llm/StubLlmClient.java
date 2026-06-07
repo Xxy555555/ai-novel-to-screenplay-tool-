@@ -9,7 +9,10 @@ import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 
 /**
  * 离线规则桩 LLM（默认 provider）—— 无需任何 API Key 即可跑通完整管线，现场零依赖演示。
@@ -55,6 +58,301 @@ public class StubLlmClient implements LlmClient {
             return "{\"characters\":[],\"scenes\":[{\"int_ext\":\"INT\",\"location\":\"室内\","
                     + "\"time_of_day\":\"\",\"present\":[],\"source\":\"\",\"beats\":[]}]}";
         }
+    }
+
+    /**
+     * 多轮对话精修（离线确定性）。识别 {@link PromptTemplates#REFINE_SCREENPLAY_MARKER} 后，
+     * 解析内嵌剧本 JSON 并按用户指令做<strong>规则化改写</strong>，返回
+     * {@code {"reply": …, "screenplay": …}} 信封；非精修对话退化为单轮 {@link #complete}。
+     *
+     * <p>支持的离线指令（中英关键词）：调情绪/节奏（紧张/轻松/压抑…）、加画外音(V.O.)、
+     * 加分镜、改标题、删除场景、新增场景。无法识别时只回文字、不改剧本（changed=false）。
+     */
+    @Override
+    public String chat(String systemPrompt, List<LlmClient.ChatMessage> messages) {
+        String last = "";
+        if (messages != null) {
+            for (LlmClient.ChatMessage m : messages) {
+                if (m != null && m.content() != null) {
+                    last = m.content();
+                }
+            }
+        }
+        if (!last.contains(PromptTemplates.REFINE_SCREENPLAY_MARKER)) {
+            return LlmClient.super.chat(systemPrompt, messages); // 非精修：走默认扁平化 → complete
+        }
+        try {
+            return refine(last);
+        } catch (Exception e) {
+            // 兜底：解析/改写失败时只回文字，不动剧本。
+            return envelope("离线助手暂时无法解析该指令，剧本未改动。", null);
+        }
+    }
+
+    /** 解析精修用户消息，按指令改写剧本并产出信封 JSON。 */
+    private String refine(String user) throws Exception {
+        String json = between(user, PromptTemplates.REFINE_SCREENPLAY_MARKER, PromptTemplates.REFINE_INSTRUCTION_MARKER);
+        String instruction = afterMarker(user, PromptTemplates.REFINE_INSTRUCTION_MARKER);
+        int stop = instruction.indexOf("请按系统要求");
+        if (stop >= 0) {
+            instruction = instruction.substring(0, stop);
+        }
+        instruction = instruction.trim();
+
+        JsonNode rootNode = mapper.readTree(json.trim());
+        if (!rootNode.isObject()) {
+            return envelope("未能解析当前剧本，剧本未改动。", null);
+        }
+        ObjectNode root = (ObjectNode) rootNode;
+        ArrayNode scenes = root.has("scenes") && root.get("scenes").isArray()
+                ? (ArrayNode) root.get("scenes") : root.putArray("scenes");
+
+        String lower = instruction.toLowerCase();
+        String targetId = targetSceneId(instruction);
+        List<String> notes = new ArrayList<>();
+
+        // 1) 情绪 / 节奏
+        String[] moodPacing = moodPacingFor(instruction, lower);
+        if (moodPacing != null) {
+            List<ObjectNode> targets = scenesToEdit(scenes, targetId);
+            for (ObjectNode sc : targets) {
+                sc.put("mood", moodPacing[0]);
+                sc.put("pacing", moodPacing[1]);
+            }
+            if (!targets.isEmpty()) {
+                notes.add("已把" + scope(targetId, targets.size()) + "的情绪调为「" + moodPacing[0]
+                        + "」、节奏调为「" + moodPacing[1] + "」");
+            }
+        }
+
+        // 2) 画外音 V.O.
+        if (containsAny(instruction, lower, "画外音", "旁白", "内心", "独白", "voiceover", "voice-over", "v.o", "monologue")) {
+            ObjectNode sc = targetId != null ? findScene(scenes, targetId) : firstScene(scenes);
+            if (sc != null) {
+                ArrayNode els = sc.has("elements") && sc.get("elements").isArray()
+                        ? (ArrayNode) sc.get("elements") : sc.putArray("elements");
+                ObjectNode vo = mapper.createObjectNode();
+                vo.put("type", "voiceover");
+                String cid = pickCharacterId(sc, root);
+                if (cid != null) {
+                    vo.put("character", cid);
+                }
+                vo.put("line", "（内心独白）此刻，他的心绪久久不能平静。");
+                els.add(vo);
+                notes.add("已为 " + sc.path("id").asText("该场景") + " 添加一条画外音（V.O.）");
+            }
+        }
+
+        // 3) 分镜 / 镜头
+        if (containsAny(instruction, lower, "分镜", "镜头", "机位", "特写", "shot", "close-up", "closeup")) {
+            ObjectNode sc = targetId != null ? findScene(scenes, targetId) : firstScene(scenes);
+            if (sc != null) {
+                ArrayNode shots = sc.has("shots") && sc.get("shots").isArray()
+                        ? (ArrayNode) sc.get("shots") : sc.putArray("shots");
+                String shot = containsAny(instruction, lower, "特写", "close") ? "特写"
+                        : containsAny(instruction, lower, "远景", "wide") ? "大远景" : "中景";
+                boolean exists = false;
+                for (JsonNode s : shots) {
+                    if (shot.equals(s.asText())) {
+                        exists = true;
+                        break;
+                    }
+                }
+                if (!exists) {
+                    shots.add(shot);
+                    notes.add("已为 " + sc.path("id").asText("该场景") + " 补充分镜「" + shot + "」");
+                }
+            }
+        }
+
+        // 4) 改标题
+        if (containsAny(instruction, lower, "标题", "改名", "命名", "title", "rename")) {
+            String newTitle = quoted(instruction);
+            if (newTitle != null && !newTitle.isBlank()) {
+                ObjectNode meta = root.has("meta") && root.get("meta").isObject()
+                        ? (ObjectNode) root.get("meta") : root.putObject("meta");
+                meta.put("title", newTitle);
+                notes.add("已将标题改为「" + newTitle + "」");
+            }
+        }
+
+        // 5) 删除场景（需指定场景 id，且至少保留 1 场）
+        if (containsAny(instruction, lower, "删除", "去掉", "删掉", "remove", "delete") && targetId != null) {
+            int idx = indexOfScene(scenes, targetId);
+            if (idx >= 0 && scenes.size() > 1) {
+                scenes.remove(idx);
+                notes.add("已删除场景 " + targetId);
+            }
+        }
+
+        // 6) 新增场景
+        if (containsAny(instruction, lower, "新增场景", "加一场", "添加场景", "add scene", "new scene")) {
+            ObjectNode sc = mapper.createObjectNode();
+            sc.put("id", nextSceneId(scenes));
+            ObjectNode heading = sc.putObject("heading");
+            heading.put("int_ext", "INT");
+            heading.put("location", "新场景");
+            heading.put("time_of_day", "日");
+            ArrayNode els = sc.putArray("elements");
+            ObjectNode action = mapper.createObjectNode();
+            action.put("type", "action");
+            action.put("text", "（新场景内容待补）");
+            els.add(action);
+            scenes.add(sc);
+            notes.add("已新增场景 " + sc.get("id").asText());
+        }
+
+        String reply = notes.isEmpty()
+                ? "我理解你的需求是：「" + (instruction.isBlank() ? "（空）" : instruction) + "」。当前为离线 stub 模式，"
+                  + "可执行的指令包括：调整情绪/节奏、添加画外音(V.O.)、补充分镜、修改标题、删除/新增场景。"
+                  + "接入真实大模型后可执行更复杂的精修。"
+                : String.join("；", notes) + "。";
+        return envelope(reply, root);
+    }
+
+    // ───────────────────────── 精修：解析与改写小工具 ─────────────────────────
+
+    private String envelope(String reply, JsonNode screenplay) {
+        ObjectNode env = mapper.createObjectNode();
+        env.put("reply", reply);
+        if (screenplay != null) {
+            env.set("screenplay", screenplay);
+        }
+        try {
+            return mapper.writeValueAsString(env);
+        } catch (Exception e) {
+            return "{\"reply\":\"离线助手内部错误。\"}";
+        }
+    }
+
+    private static String between(String s, String a, String b) {
+        int i = s.indexOf(a);
+        if (i < 0) {
+            return "";
+        }
+        i += a.length();
+        int j = s.indexOf(b, i);
+        return j < 0 ? s.substring(i) : s.substring(i, j);
+    }
+
+    private static String afterMarker(String s, String marker) {
+        int i = s.indexOf(marker);
+        return i < 0 ? "" : s.substring(i + marker.length());
+    }
+
+    private static boolean containsAny(String original, String lower, String... keys) {
+        for (String k : keys) {
+            if (k == null || k.isEmpty()) {
+                continue;
+            }
+            if (original.contains(k) || lower.contains(k.toLowerCase())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** 情绪+节奏二元组；未命中返回 null。 */
+    private static String[] moodPacingFor(String original, String lower) {
+        if (containsAny(original, lower, "紧张", "悬疑", "紧迫", "危机", "tense", "tension", "suspense", "thrill")) {
+            return new String[]{"紧张", "快"};
+        }
+        if (containsAny(original, lower, "压抑", "沉重", "悲伤", "绝望", "somber", "heavy", "sad")) {
+            return new String[]{"压抑", "缓"};
+        }
+        if (containsAny(original, lower, "轻松", "轻快", "舒缓", "温馨", "欢快", "calm", "relax", "warm", "gentle")) {
+            return new String[]{"轻快", "缓"};
+        }
+        return null;
+    }
+
+    private static final Pattern SCENE_REF = Pattern.compile("[sS](\\d+)|第\\s*(\\d+)\\s*场");
+
+    /** 从指令里解析目标场景 id（如 S2 / 第2场）；无则返回 null。 */
+    private static String targetSceneId(String instruction) {
+        Matcher m = SCENE_REF.matcher(instruction);
+        if (m.find()) {
+            String n = m.group(1) != null ? m.group(1) : m.group(2);
+            return "S" + n;
+        }
+        return null;
+    }
+
+    private static List<ObjectNode> scenesToEdit(ArrayNode scenes, String targetId) {
+        List<ObjectNode> out = new ArrayList<>();
+        if (targetId != null) {
+            ObjectNode sc = findScene(scenes, targetId);
+            if (sc != null) {
+                out.add(sc);
+            }
+            return out;
+        }
+        for (JsonNode s : scenes) {
+            if (s.isObject()) {
+                out.add((ObjectNode) s);
+            }
+        }
+        return out;
+    }
+
+    private static ObjectNode findScene(ArrayNode scenes, String id) {
+        for (JsonNode s : scenes) {
+            if (s.isObject() && id.equals(s.path("id").asText())) {
+                return (ObjectNode) s;
+            }
+        }
+        return null;
+    }
+
+    private static int indexOfScene(ArrayNode scenes, String id) {
+        for (int i = 0; i < scenes.size(); i++) {
+            if (id.equals(scenes.get(i).path("id").asText())) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private static ObjectNode firstScene(ArrayNode scenes) {
+        return scenes.size() > 0 && scenes.get(0).isObject() ? (ObjectNode) scenes.get(0) : null;
+    }
+
+    private static String nextSceneId(ArrayNode scenes) {
+        int max = 0;
+        for (JsonNode s : scenes) {
+            String id = s.path("id").asText("");
+            if (id.matches("S\\d+")) {
+                max = Math.max(max, Integer.parseInt(id.substring(1)));
+            }
+        }
+        return "S" + (max + 1);
+    }
+
+    /** 优先取场景在场角色的首个合法 id，否则取角色表首个合法 id，否则 null。 */
+    private static String pickCharacterId(ObjectNode scene, ObjectNode root) {
+        for (JsonNode p : scene.path("present_characters")) {
+            if (p.asText("").matches("C\\d+")) {
+                return p.asText();
+            }
+        }
+        for (JsonNode c : root.path("characters")) {
+            if (c.path("id").asText("").matches("C\\d+")) {
+                return c.path("id").asText();
+            }
+        }
+        return null;
+    }
+
+    private static final Pattern QUOTED = Pattern.compile("[「『\"“]([^」』\"”]{1,60})[」』\"”]");
+
+    /** 从指令里抽取引号内的标题文本（支持「」『』 "" “”）。 */
+    private static String quoted(String instruction) {
+        Matcher m = QUOTED.matcher(instruction);
+        return m.find() ? m.group(1).trim() : null;
+    }
+
+    private static String scope(String targetId, int count) {
+        return targetId != null ? targetId : "全部 " + count + " 个场景";
     }
 
     /** 从用户提示中截取三引号 {@code """} 之间的章节正文；截不到则退回全文。 */

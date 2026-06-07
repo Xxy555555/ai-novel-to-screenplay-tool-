@@ -30,7 +30,7 @@ public class GenerationService {
     private static final Logger log = LoggerFactory.getLogger(GenerationService.class);
 
     /** 待生成会话的输入。 */
-    private record InputSpec(String text, String language, String title, String sourceTitle) {}
+    private record InputSpec(String text, String language, String title, String sourceTitle, String requirements) {}
 
     private final Map<String, InputSpec> pending = new ConcurrentHashMap<>();
     private final Map<String, Screenplay> results = new ConcurrentHashMap<>();
@@ -50,8 +50,13 @@ public class GenerationService {
         this.mapper = mapper;
     }
 
-    /** 创建会话，返回 sessionId；此时尚不启动生成。 */
+    /** 兼容重载：不带用户需求的会话创建。 */
     public String createSession(String sampleId, String text, String language, String title) {
+        return createSession(sampleId, text, language, title, null);
+    }
+
+    /** 创建会话，返回 sessionId；此时尚不启动生成。 */
+    public String createSession(String sampleId, String text, String language, String title, String requirements) {
         String novel;
         String src;
         String ttl;
@@ -73,7 +78,7 @@ public class GenerationService {
             throw new IllegalArgumentException("小说内容为空，请上传文本或选择内置示例。");
         }
         String id = UUID.randomUUID().toString();
-        pending.put(id, new InputSpec(novel, language, ttl, src));
+        pending.put(id, new InputSpec(novel, language, ttl, src, requirements));
         return id;
     }
 
@@ -89,7 +94,8 @@ public class GenerationService {
         SsePipelineListener listener = new SsePipelineListener(emitter);
         executor.submit(() -> {
             try {
-                Screenplay sp = orchestrator.run(spec.text(), spec.language(), spec.title(), spec.sourceTitle(), listener);
+                Screenplay sp = orchestrator.run(spec.text(), spec.language(), spec.title(), spec.sourceTitle(),
+                        spec.requirements(), listener);
                 results.put(id, sp);
                 sendQuietly(emitter, "complete", sp);
                 emitter.complete();

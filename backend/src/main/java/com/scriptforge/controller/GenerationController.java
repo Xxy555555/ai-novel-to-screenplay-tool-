@@ -24,14 +24,19 @@ public class GenerationController {
         this.service = service;
     }
 
-    /** 生成请求：二选一传 {@code sampleId}（内置示例）或 {@code text}（上传正文）。 */
-    public record GenerateRequest(String sampleId, String text, String language, String title) {}
+    /**
+     * 生成请求：二选一传 {@code sampleId}（内置示例）或 {@code text}（上传正文）。
+     *
+     * @param requirements 用户上传时提出的改编需求（自由文本，可空）；会注入理解层并记入 meta
+     */
+    public record GenerateRequest(String sampleId, String text, String language, String title,
+                                  String requirements) {}
 
     public record GenerateResponse(String sessionId) {}
 
     @PostMapping("/generate")
     public GenerateResponse generate(@RequestBody GenerateRequest req) {
-        String id = service.createSession(req.sampleId(), req.text(), req.language(), req.title());
+        String id = service.createSession(req.sampleId(), req.text(), req.language(), req.title(), req.requirements());
         return new GenerateResponse(id);
     }
 

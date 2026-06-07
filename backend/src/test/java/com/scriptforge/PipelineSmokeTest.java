@@ -54,7 +54,7 @@ class PipelineSmokeTest {
         List<Scene> scenes = compose.compose(facts, PipelineListener.NOOP);
 
         Screenplay draft = new Screenplay(
-                new Meta("《活着》改编", "改编自 余华《活着》", "余华", "zh", stub.describe()),
+                new Meta("《活着》改编", "改编自 余华《活着》", "余华", "zh", stub.describe(), null),
                 state.snapshot(), scenes, null);
         AutoRepair.RepairOutcome ro = validate.validate(draft, PipelineListener.NOOP);
         QualityReport report = quality.report(ro.screenplay(), ro.errorCount());

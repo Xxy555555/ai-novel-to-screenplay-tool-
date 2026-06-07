@@ -1,5 +1,7 @@
 package com.scriptforge.llm;
 
+import java.util.List;
+
 /**
  * 通用大模型客户端接口 —— 整个适配层只暴露这一个抽象。
  *
@@ -26,4 +28,33 @@ public interface LlmClient {
      * 例如 {@code "stub/scriptforge-stub-1"} 或 {@code "openai/gpt-4o"}。
      */
     String describe();
+
+    /**
+     * 多轮对话中的一条消息。
+     *
+     * @param role    角色：{@code system} / {@code user} / {@code assistant}
+     * @param content 文本内容
+     */
+    record ChatMessage(String role, String content) {}
+
+    /**
+     * 多轮对话补全 —— 供「对话精修剧本」使用（带历史 + 当前剧本 → 改写）。
+     *
+     * <p>{@code messages} 为按时间顺序排列的对话（通常以 {@code user} 结尾，即本轮指令）；
+     * {@code systemPrompt} 独立传入。默认实现把历史<strong>扁平化</strong>为单轮 {@link #complete}，
+     * OpenAI 兼容 / Claude 客户端覆盖为原生多轮，stub 覆盖为离线确定性精修。
+     *
+     * @param systemPrompt 系统提示（可为 {@code null}）
+     * @param messages     对话消息序列（不含 system）
+     * @return 模型返回的原始文本
+     */
+    default String chat(String systemPrompt, List<ChatMessage> messages) {
+        StringBuilder sb = new StringBuilder();
+        if (messages != null) {
+            for (ChatMessage m : messages) {
+                sb.append(m.role()).append(": ").append(m.content()).append("\n\n");
+            }
+        }
+        return complete(systemPrompt, sb.toString());
+    }
 }

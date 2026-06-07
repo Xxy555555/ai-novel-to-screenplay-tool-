@@ -50,17 +50,24 @@ public final class PromptTemplates {
                 + "并且只输出严格合法的 JSON（不要 markdown、不要解释、不要代码围栏）。不要编造原文没有的事实。";
     }
 
-    /**
-     * 用户提示：拼接章节正文、已知角色圣经快照与输出格式要求。
-     *
-     * @param chapterIndex   章节序号
-     * @param chapterTitle   章节标题
-     * @param chapterContent 章节正文
-     * @param bible          当前角色圣经快照（供跨章一致性：沿用既有角色 id / 名）
-     * @param language       语言（影响提示语言）
-     */
+    /** 兼容重载：不带用户需求的理解层提示。 */
     public static String analyzeUser(int chapterIndex, String chapterTitle, String chapterContent,
                                      List<Character> bible, String language) {
+        return analyzeUser(chapterIndex, chapterTitle, chapterContent, bible, language, null);
+    }
+
+    /**
+     * 用户提示：拼接章节正文、已知角色圣经快照、（可选）用户改编需求与输出格式要求。
+     *
+     * @param chapterIndex     章节序号
+     * @param chapterTitle     章节标题
+     * @param chapterContent   章节正文
+     * @param bible            当前角色圣经快照（供跨章一致性：沿用既有角色 id / 名）
+     * @param language         语言（影响提示语言）
+     * @param userRequirements 用户上传时提出的改编需求（自由文本，可为空/{@code null}）
+     */
+    public static String analyzeUser(int chapterIndex, String chapterTitle, String chapterContent,
+                                     List<Character> bible, String language, String userRequirements) {
         boolean en = "en".equalsIgnoreCase(language);
         StringBuilder known = new StringBuilder();
         if (bible != null && !bible.isEmpty()) {
@@ -72,6 +79,11 @@ public final class PromptTemplates {
                 known.append('\n');
             }
         }
+        boolean hasReq = userRequirements != null && !userRequirements.isBlank();
+        String reqBlock = !hasReq ? ""
+                : (en ? "\nUser adaptation requirements (honor them while staying faithful to the text):\n"
+                        + userRequirements.trim() + "\n"
+                      : "\n用户改编需求（在忠于原文的前提下尽量满足）：\n" + userRequirements.trim() + "\n");
         String schema = """
                 {
                   "characters": [ { "name": "", "aliases": [], "role": "", "tone": "",
@@ -84,6 +96,7 @@ public final class PromptTemplates {
         if (en) {
             return "Known characters (reuse the same names for the same person across chapters):\n"
                     + (known.length() == 0 ? "(none yet)\n" : known)
+                    + reqBlock
                     + "\nChapter " + chapterIndex + " — " + chapterTitle + ":\n\"\"\"\n"
                     + chapterContent + "\n\"\"\"\n\n"
                     + "Split this chapter into scenes (by time + place + present characters), and for each scene "
@@ -92,11 +105,52 @@ public final class PromptTemplates {
         }
         return "已知角色（同一人在不同章节请沿用同一名字）：\n"
                 + (known.length() == 0 ? "（暂无）\n" : known)
+                + reqBlock
                 + "\n第 " + chapterIndex + " 章 —— " + chapterTitle + "：\n\"\"\"\n"
                 + chapterContent + "\n\"\"\"\n\n"
                 + "请把本章按「时间+地点+在场人物」切分为若干场景，每个场景给出有序节拍："
                 + "心理/叙述用 narration，台词用 dialogue（含 speaker），可见事件用 action。"
                 + "严格按以下形状输出 JSON：\n" + schema;
+    }
+
+    // ───────────────────────── 对话精修（多轮） ─────────────────────────
+
+    /** 标记：用户消息中「当前剧本 JSON」分隔符。stub 据此识别为精修请求并解析剧本。 */
+    public static final String REFINE_SCREENPLAY_MARKER = "【当前剧本 JSON】";
+    /** 标记：用户消息中「用户指令」分隔符。 */
+    public static final String REFINE_INSTRUCTION_MARKER = "【用户指令】";
+
+    /**
+     * 对话精修系统提示：把模型定位为「按指令改写整本剧本并只回 JSON 信封」的编辑助手。
+     * 输出契约：{@code {"reply": "对所做修改的简要说明", "screenplay": <完整剧本对象>}}。
+     */
+    public static String refineSystem(String language) {
+        boolean en = "en".equalsIgnoreCase(language);
+        if (en) {
+            return "You are a screenplay editing assistant. Given the CURRENT screenplay and the user's "
+                    + "instruction, return the FULL modified screenplay. Preserve scenes/characters the user "
+                    + "did not mention. Keep the same JSON structure (meta / characters / scenes / report) and the "
+                    + "same id scheme (characters C1.., scenes S1.., character references by id). Output STRICT JSON "
+                    + "ONLY in this exact shape, no markdown, no prose:\n"
+                    + "{ \"reply\": \"<short note describing what you changed>\", \"screenplay\": { ...full screenplay... } }";
+        }
+        return "你是剧本精修助手。给定「当前剧本」与「用户指令」，请返回修改后的<strong>完整剧本</strong>，"
+                + "保留用户未提及的场景/角色，沿用相同结构（meta / characters / scenes / report）与 id 体系"
+                + "（角色 C1.. 场景 S1.. 对白以角色 id 引用）。只输出严格合法的 JSON（不要 markdown、不要解释），"
+                + "且必须是以下信封形状：\n"
+                + "{ \"reply\": \"<对所做修改的简要中文说明>\", \"screenplay\": { …完整剧本… } }";
+    }
+
+    /**
+     * 对话精修用户提示：内嵌当前剧本 JSON 与用户指令（用固定标记包裹，便于 stub 离线解析）。
+     *
+     * @param screenplayJson 当前剧本的 JSON 字符串（snake_case）
+     * @param instruction    本轮用户指令
+     */
+    public static String refineUser(String screenplayJson, String instruction) {
+        return REFINE_SCREENPLAY_MARKER + "\n" + screenplayJson + "\n\n"
+                + REFINE_INSTRUCTION_MARKER + "\n" + (instruction == null ? "" : instruction.trim()) + "\n\n"
+                + "请按系统要求只返回 JSON 信封：{ \"reply\": \"…\", \"screenplay\": { … } }";
     }
 
     /**

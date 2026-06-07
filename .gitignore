@@ -3,6 +3,13 @@ backend/target/
 frontend/node_modules/
 frontend/dist/
 
+# 测试产物（覆盖率 / 结果 / e2e）—— 报告由 scripts/gen-test-report.mjs 重新生成
+frontend/coverage/
+frontend/test-results.json
+e2e/node_modules/
+e2e/playwright-report/
+e2e/test-results/
+
 # 日志
 *.log
 

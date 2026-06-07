@@ -44,13 +44,55 @@ public class ClaudeClient implements LlmClient {
 
     @Override
     public String complete(String systemPrompt, String userPrompt) {
+        List<Map<String, Object>> messages = new java.util.ArrayList<>();
+        messages.add(msg("user", userPrompt == null ? "" : userPrompt));
+        return send(systemPrompt, messages);
+    }
+
+    @Override
+    public String chat(String systemPrompt, List<ChatMessage> history) {
+        // 原生多轮：Anthropic 的 messages 仅含 user/assistant（system 单独传）。
+        // Anthropic 要求 messages 必须以 user 开头、user/assistant 严格交替。这里做防御性规整：
+        // 丢弃开头的 assistant、合并相邻同角色，保证序列合法（即便上游历史不规范也不会 400）。
+        List<Map<String, Object>> messages = new java.util.ArrayList<>();
+        if (history != null) {
+            for (ChatMessage m : history) {
+                if (m == null || m.content() == null) {
+                    continue;
+                }
+                String role = "assistant".equals(m.role()) ? "assistant" : "user";
+                if (messages.isEmpty() && "assistant".equals(role)) {
+                    continue; // 丢弃开头的 assistant
+                }
+                Map<String, Object> last = messages.isEmpty() ? null : messages.get(messages.size() - 1);
+                if (last != null && role.equals(last.get("role"))) {
+                    last.put("content", last.get("content") + "\n\n" + m.content()); // 合并相邻同角色
+                } else {
+                    messages.add(msg(role, m.content()));
+                }
+            }
+        }
+        if (messages.isEmpty()) {
+            messages.add(msg("user", ""));
+        }
+        return send(systemPrompt, messages);
+    }
+
+    private static Map<String, Object> msg(String role, String content) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("role", role);
+        m.put("content", content);
+        return m;
+    }
+
+    private String send(String systemPrompt, List<Map<String, Object>> messages) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("model", props.getModel());
         body.put("max_tokens", props.getMaxTokens());
         if (systemPrompt != null && !systemPrompt.isBlank()) {
             body.put("system", systemPrompt);
         }
-        body.put("messages", List.of(Map.of("role", "user", "content", userPrompt == null ? "" : userPrompt)));
+        body.put("messages", messages);
         // 故意不放 temperature / top_p / top_k。
 
         String base = props.getBaseUrl();
