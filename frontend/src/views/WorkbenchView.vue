@@ -41,6 +41,7 @@ const threadsOpen = ref(false) // 历史线程列表展开
 // ───────── AI 质量评测 ─────────
 const evalBusy = ref(false)
 const evalResult = ref(null) // { score, assessment, suggestions, ai_evaluated }
+const adoptingIdx = ref(-1)  // 正在采纳的建议下标（按钮 loading）
 
 // ───────── 对话改动待确认（内容级 diff，类似 Cursor）─────────
 const pendingScreenplay = ref(null) // AI 返回但尚未应用的剧本
@@ -392,6 +393,35 @@ async function runEval() {
     toast('评测失败：' + m)
   } finally {
     evalBusy.value = false
+  }
+}
+// 采纳某条评测建议：把它包装成精修指令执行，并走 diff 待确认流程。
+async function adoptSuggestion(text, idx) {
+  if (chatBusy.value || adoptingIdx.value >= 0) return
+  if (pendingDiff.value) {
+    toast('请先采纳或拒绝当前待确认的改动')
+    return
+  }
+  const instruction = '请采纳以下改编评测建议来精修剧本（只改与该建议直接相关之处，其余保持不变）：' + text
+  adoptingIdx.value = idx
+  chat.appendMessage('user', '【采纳建议】' + text)
+  chatScrollToBottom()
+  try {
+    const resp = await chatRefine({
+      screenplay: plainScreenplay(),
+      message: instruction,
+      history: [],
+      language: store.source?.language || 'auto',
+    })
+    chat.appendMessage('assistant', resp.reply || '（无回复）')
+    if (resp.changed && resp.screenplay) proposeRefined(resp.screenplay)
+    else toast('该建议未带来可见改动')
+  } catch (e) {
+    const m = e.response?.data?.message || e.message || '采纳失败'
+    chat.appendMessage('assistant', '出错了：' + m)
+    toast('采纳失败：' + m)
+  } finally {
+    adoptingIdx.value = -1
   }
 }
 
@@ -874,7 +904,12 @@ function onDocClick(e) {
               <p class="ae-assess">{{ evalResult.assessment }}</p>
               <h6 v-if="evalResult.suggestions && evalResult.suggestions.length">修改建议</h6>
               <ul class="ae-sugg">
-                <li v-for="(s, i) in evalResult.suggestions" :key="i">{{ s }}</li>
+                <li v-for="(s, i) in evalResult.suggestions" :key="i">
+                  <span class="s-txt">{{ s }}</span>
+                  <button class="s-adopt" :disabled="adoptingIdx >= 0 || chatBusy" @click="adoptSuggestion(s, i)">
+                    {{ adoptingIdx === i ? '采纳中…' : '采纳' }}
+                  </button>
+                </li>
               </ul>
             </div>
           </div>
@@ -1243,8 +1278,12 @@ button { font: inherit; cursor: pointer; }
 .ai-eval .ae-assess { font-size: 13px; color: var(--text); line-height: 1.7; margin-bottom: 10px; white-space: pre-wrap; }
 .ai-eval h6 { font-size: 12px; color: var(--text-2); margin-bottom: 7px; }
 .ai-eval .ae-sugg { list-style: none; display: flex; flex-direction: column; gap: 7px; }
-.ai-eval .ae-sugg li { position: relative; font-size: 13px; color: var(--text-2); line-height: 1.6; padding-left: 16px; }
+.ai-eval .ae-sugg li { position: relative; display: flex; align-items: flex-start; gap: 8px; font-size: 13px; color: var(--text-2); line-height: 1.6; padding-left: 16px; }
 .ai-eval .ae-sugg li::before { content: '·'; position: absolute; left: 4px; color: var(--accent); font-weight: 700; }
+.ai-eval .ae-sugg .s-txt { flex: 1; min-width: 0; }
+.ai-eval .ae-sugg .s-adopt { flex: none; background: var(--accent-soft); border: 1px solid rgba(232, 179, 73, 0.35); color: var(--accent); border-radius: 6px; padding: 2px 10px; font-size: 12px; white-space: nowrap; }
+.ai-eval .ae-sugg .s-adopt:hover { border-color: var(--accent); }
+.ai-eval .ae-sugg .s-adopt:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* AI 对话 */
 .tabpane.chat { display: flex; flex-direction: column; flex: 1; overflow: hidden; padding: 12px; }
