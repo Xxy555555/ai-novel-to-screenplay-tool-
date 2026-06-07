@@ -1,6 +1,6 @@
 # YAML Schema 设计文档 ——「ScriptForge」剧本数据结构
 
-> 版本：v1.0 ｜ 日期：2026-06-05 ｜ 状态：契约先行（实现前定稿）
+> 版本：v1.1 ｜ 日期：2026-06-07 ｜ 状态：已实现并与代码校验一致（契约先行）
 > 配套：`backend/src/main/resources/screenplay.schema.json`（机器可校验契约）、
 > `com.scriptforge.model.*`（Java 记录类型，与本文档逐字段对应）、
 > `docs/PRD.md` 6.3 节、`docs/UI-Prototype-Design.md`（前端按本结构渲染）。
