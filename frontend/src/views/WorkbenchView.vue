@@ -14,6 +14,7 @@ const EL_TYPES = ['action', 'dialogue', 'voiceover', 'transition', 'montage']
 
 const data = ref(null) // 响应式剧本（后端 snake_case 形状）
 const viewMode = ref('cards') // cards | yaml
+const yamlScope = ref('scene') // scene（仅当前场景，默认）| full（完整剧本）
 const yamlText = ref('')
 const selScene = ref('')
 const activeTab = ref('char') // char | qual | chat
@@ -135,9 +136,15 @@ function switchView(v) {
   viewMode.value = v
   if (v === 'yaml') syncYamlFromModel()
 }
+// 切换 YAML 显示范围（当前场景 / 完整剧本）并立即重新序列化。
+function setYamlScope(v) {
+  yamlScope.value = v
+  if (viewMode.value === 'yaml') syncYamlFromModel()
+}
 function syncYamlFromModel() {
   try {
-    yamlText.value = jsyaml.dump(plainScreenplay(), { indent: 2, lineWidth: -1, noRefs: true, skipInvalid: true })
+    const src = yamlScope.value === 'scene' ? plainCurrentScene() : plainScreenplay()
+    yamlText.value = jsyaml.dump(src, { indent: 2, lineWidth: -1, noRefs: true, skipInvalid: true })
   } catch (e) {
     yamlText.value = '# 序列化失败：' + e.message
   }
@@ -145,26 +152,47 @@ function syncYamlFromModel() {
 function plainScreenplay() {
   return JSON.parse(JSON.stringify(data.value))
 }
+// 当前选中场景的纯对象（YAML「仅当前场景」范围用）。
+function plainCurrentScene() {
+  return curScene.value ? JSON.parse(JSON.stringify(curScene.value)) : {}
+}
 let yTimer = null
 function onYamlInput() {
   clearTimeout(yTimer)
   yTimer = setTimeout(() => {
     try {
       const obj = jsyaml.load(yamlText.value)
-      if (obj && typeof obj === 'object') {
+      if (!obj || typeof obj !== 'object') {
+        setValid(false)
+        return
+      }
+      if (yamlScope.value === 'scene') {
+        applySceneYaml(obj)
+      } else {
         if (obj.meta) data.value.meta = obj.meta
         if (obj.characters) data.value.characters = obj.characters
         if (Array.isArray(obj.scenes)) data.value.scenes = normalize({ scenes: obj.scenes }).scenes
         if (obj.report) data.value.report = obj.report
         if (!data.value.scenes.find((s) => s.id === selScene.value)) selScene.value = data.value.scenes[0]?.id || ''
         setValid(true)
-      } else {
-        setValid(false)
       }
     } catch (e) {
       setValid(false)
     }
   }, 380)
+}
+// 「仅当前场景」模式下，把编辑后的单场景对象回写到对应位置（按选中项定位，跟随 id 改名）。
+function applySceneYaml(obj) {
+  const idx = data.value.scenes.findIndex((s) => s.id === selScene.value)
+  if (idx < 0) {
+    setValid(false)
+    return
+  }
+  if (!obj.id) obj.id = selScene.value // 用户删了 id 时沿用原 id
+  const normScene = normalize({ scenes: [obj] }).scenes[0]
+  data.value.scenes.splice(idx, 1, normScene)
+  if (normScene.id !== selScene.value) selScene.value = normScene.id // 跟随场景改名
+  setValid(true)
 }
 function setValid(ok) {
   valid.value = ok
@@ -220,6 +248,8 @@ function goHome() {
 function selectScene(id) {
   selScene.value = id
   dimChar.value = ''
+  // YAML「仅当前场景」模式：切场景时同步显示新场景的 YAML。
+  if (viewMode.value === 'yaml' && yamlScope.value === 'scene') syncYamlFromModel()
   if (window.innerWidth <= 900) leftOpen.value = false
   nextTick(() => {
     const c = document.querySelector('.center')
@@ -250,7 +280,9 @@ function locate(sceneId) {
 // ───────── 重校验 ─────────
 async function revalidate() {
   try {
-    const yaml = viewMode.value === 'yaml' ? yamlText.value : jsyaml.dump(plainScreenplay(), { indent: 2, lineWidth: -1, noRefs: true, skipInvalid: true })
+    // 「仅当前场景」时 yamlText 只含单场景，重校验须用模型里的完整剧本（编辑已回写）。
+    const useRaw = viewMode.value === 'yaml' && yamlScope.value === 'full'
+    const yaml = useRaw ? yamlText.value : jsyaml.dump(plainScreenplay(), { indent: 2, lineWidth: -1, noRefs: true, skipInvalid: true })
     const r = await validateYaml(yaml)
     setValid(r.valid)
     if (r.report) data.value.report = r.report
@@ -593,9 +625,13 @@ function onDocClick(e) {
         <!-- YAML -->
         <div class="yaml-wrap" v-show="viewMode === 'yaml'">
           <div class="yaml-bar">
+            <div class="yscope" role="group" aria-label="YAML 显示范围">
+              <button :class="{ on: yamlScope === 'scene' }" @click="setYamlScope('scene')">当前场景<span v-if="curScene" class="sc">{{ curScene.id }}</span></button>
+              <button :class="{ on: yamlScope === 'full' }" @click="setYamlScope('full')">完整剧本</button>
+            </div>
             <span class="vstat" :class="valid ? 'ok' : 'bad'">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3"><path v-if="valid" d="M20 6L9 17l-5-5" /><path v-else d="M12 8v5M12 17h.01M10.3 3.9L2 18a2 2 0 001.7 3h16.6a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z" /></svg>
-              {{ valid ? 'Schema 合法' : '解析失败 · 检查缩进/格式' }}
+              {{ valid ? (yamlScope === 'scene' ? '已同步 · 当前场景' : 'Schema 合法') : '解析失败 · 检查缩进/格式' }}
             </span>
             <span class="sp"></span>
             <button @click="revalidate">重校验</button>
@@ -887,6 +923,10 @@ button { font: inherit; cursor: pointer; }
 /* YAML view */
 .yaml-wrap { display: flex; flex-direction: column; min-height: 0; flex: 1; }
 .yaml-bar { display: flex; align-items: center; gap: 10px; padding: 9px 16px; border-bottom: 1px solid var(--border); background: var(--bg); font-size: 12px; color: var(--muted); }
+.yaml-bar .yscope { display: inline-flex; background: var(--raised); border: 1px solid var(--border); border-radius: 7px; padding: 2px; }
+.yaml-bar .yscope button { display: inline-flex; align-items: center; gap: 5px; background: none; border: none; color: var(--text-2); padding: 4px 10px; border-radius: 5px; font-size: 12px; }
+.yaml-bar .yscope button.on { background: var(--accent); color: #0e1116; font-weight: 600; }
+.yaml-bar .yscope button .sc { font-family: var(--mono); font-size: 10px; opacity: 0.85; }
 .yaml-bar .vstat { display: inline-flex; align-items: center; gap: 6px; }
 .yaml-bar .vstat.ok { color: var(--success); }
 .yaml-bar .vstat.bad { color: var(--danger); }
