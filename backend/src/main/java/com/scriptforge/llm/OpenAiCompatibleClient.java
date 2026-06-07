@@ -1,5 +1,6 @@
 package com.scriptforge.llm;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -24,12 +25,21 @@ public class OpenAiCompatibleClient implements LlmClient {
     private final RestClient http;
 
     public OpenAiCompatibleClient(LlmProperties props) {
+        this(props, defaultBuilder(props));
+    }
+
+    /** 可注入 builder 的构造器（测试用：绑定 MockRestServiceServer 验证响应解析鲁棒性）。 */
+    OpenAiCompatibleClient(LlmProperties props, RestClient.Builder builder) {
         this.props = props;
+        this.http = builder.build();
+    }
+
+    private static RestClient.Builder defaultBuilder(LlmProperties props) {
         SimpleClientHttpRequestFactory rf = new SimpleClientHttpRequestFactory();
         int ms = Math.max(1, props.getTimeoutSeconds()) * 1000;
         rf.setConnectTimeout(ms);
         rf.setReadTimeout(ms);
-        this.http = RestClient.builder().requestFactory(rf).build();
+        return RestClient.builder().requestFactory(rf);
     }
 
     @Override
@@ -71,13 +81,17 @@ public class OpenAiCompatibleClient implements LlmClient {
         body.put("max_tokens", props.getMaxTokens());
 
         try {
-            String resp = http.post()
+            // 按原始字节取响应再自行 UTF-8 解码：绕开 content-type 转换器匹配，
+            // 兼容上游把 JSON 响应头误标为 application/octet-stream 的情况（聚合网关偶发）。
+            byte[] raw = http.post()
                     .uri(props.getBaseUrl() + "/chat/completions")
                     .header("Authorization", "Bearer " + props.getApiKey())
+                    .accept(MediaType.APPLICATION_JSON)
                     .contentType(MediaType.APPLICATION_JSON)
                     .body(body)
                     .retrieve()
-                    .body(String.class);
+                    .body(byte[].class);
+            String resp = raw == null ? "" : new String(raw, StandardCharsets.UTF_8);
             JsonNode node = mapper.readTree(resp);
             return node.path("choices").path(0).path("message").path("content").asText("");
         } catch (Exception e) {
